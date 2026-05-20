@@ -22,6 +22,7 @@ export class Blob {
     this.targetX = x;
     this.targetY = y;
     this.effects = {}; // active power-ups: { speed: expiresAt, shield: ..., bloom: ..., etc. }
+    this.wiltedUntil = 0; // set by enemy Wilt auras; checked in rules.applyPhotosynthesis
     this.splitCooldown = 0;
     this.alive = true;
   }

@@ -1,12 +1,17 @@
 // Authoritative world state. Runs in the browser today; runs on a Node server later.
 // Keep this file free of any DOM / canvas / window references.
 
-import { Blob, Pellet } from './entities.js';
+import { Blob, Pellet, PowerUp, POWERUP_TYPES } from './entities.js';
 import { applyPhotosynthesis, canEat, overlaps, MIN_MASS } from './rules.js';
 import { decideBotMove } from '../ai/bot.js';
 
 const BASE_SPEED = 220; // px/sec for a tiny blob; scales down with size
 const SPLIT_COOLDOWN_MS = 8000;
+const POWERUP_DURATION_MS = 8000;
+const POWERUP_SPAWN_INTERVAL_MS = 6000;
+const POWERUP_CAP = 8;
+const MAGNET_RADIUS = 220;
+const WILT_RADIUS = 260;
 
 export class World {
   constructor({ width = 4000, height = 4000 } = {}) {
@@ -16,6 +21,7 @@ export class World {
     this.pellets = new Map();
     this.powerUps = new Map();
     this.tickCount = 0;
+    this.nextPowerUpAt = Date.now() + 2000;
   }
 
   spawnPlayer(name, ownerId = 1) {
@@ -78,9 +84,80 @@ export class World {
     }
 
     this.handleEating();
+    this.handlePowerUpPickups(now);
+    this.applyAuras(now);
+    this.applyMagnet(dt, now);
     this.mergeOwnedPieces();
     this.respawnDeadBots();
     this.refillPellets();
+    this.maybeSpawnPowerUp(now);
+  }
+
+  maybeSpawnPowerUp(now) {
+    if (now < this.nextPowerUpAt) return;
+    if (this.powerUps.size >= POWERUP_CAP) {
+      this.nextPowerUpAt = now + POWERUP_SPAWN_INTERVAL_MS;
+      return;
+    }
+    const type = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
+    const p = new PowerUp({
+      x: 100 + Math.random() * (this.width - 200),
+      y: 100 + Math.random() * (this.height - 200),
+      type,
+    });
+    this.powerUps.set(p.id, p);
+    this.nextPowerUpAt = now + POWERUP_SPAWN_INTERVAL_MS;
+  }
+
+  handlePowerUpPickups(now) {
+    for (const blob of this.blobs.values()) {
+      if (!blob.alive) continue;
+      for (const [pid, pu] of this.powerUps) {
+        if (overlaps(blob, pu, 1.1)) {
+          blob.effects[pu.type] = now + POWERUP_DURATION_MS;
+          this.powerUps.delete(pid);
+        }
+      }
+    }
+  }
+
+  applyAuras(now) {
+    // Wilt auras: enemies in radius get wiltedUntil set, doubling their move tax.
+    const wilters = [];
+    for (const b of this.blobs.values()) {
+      if (b.alive && b.effects.wilt && b.effects.wilt > now) wilters.push(b);
+    }
+    if (wilters.length === 0) return;
+    for (const victim of this.blobs.values()) {
+      if (!victim.alive) continue;
+      for (const w of wilters) {
+        if (w.id === victim.id) continue;
+        if (victim.ownerId !== null && victim.ownerId === w.ownerId) continue;
+        const dx = w.x - victim.x;
+        const dy = w.y - victim.y;
+        if (dx * dx + dy * dy < WILT_RADIUS * WILT_RADIUS) {
+          victim.wiltedUntil = now + 200;
+          break;
+        }
+      }
+    }
+  }
+
+  applyMagnet(dt, now) {
+    for (const blob of this.blobs.values()) {
+      if (!blob.alive) continue;
+      if (!blob.effects.magnet || blob.effects.magnet <= now) continue;
+      for (const p of this.pellets.values()) {
+        const dx = blob.x - p.x;
+        const dy = blob.y - p.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > MAGNET_RADIUS * MAGNET_RADIUS || d2 < 4) continue;
+        const len = Math.sqrt(d2);
+        const pull = 200 * dt;
+        p.x += (dx / len) * pull;
+        p.y += (dy / len) * pull;
+      }
+    }
   }
 
   executeCommand(ownerId, command) {
@@ -158,6 +235,11 @@ export class World {
         if (!a.alive || !b.alive) continue;
         if (a.ownerId !== null && a.ownerId === b.ownerId) continue;
         if (canEat(a, b) && overlaps(a, b, 0.6)) {
+          // Shield blocks one fatal hit, then pops.
+          if (b.effects.shield && b.effects.shield > Date.now()) {
+            delete b.effects.shield;
+            continue;
+          }
           a.mass += b.mass;
           b.alive = false;
           this.blobs.delete(b.id);
