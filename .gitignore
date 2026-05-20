@@ -1,0 +1,27 @@
+# Security — never commit these
+.env
+*.pem
+*.key
+credentials.json
+secrets/
+.gh-token
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Vite
+dist/
+dist-ssr/
+*.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
