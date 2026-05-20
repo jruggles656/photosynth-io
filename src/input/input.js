@@ -25,11 +25,11 @@ export class Input {
     });
   }
 
-  // Convert current mouse position into a world-space target for the player.
-  targetFor(player, camera, canvas) {
+  // Convert current mouse position into a world-space target relative to the camera.
+  targetFor(centerX, centerY, camera, canvas) {
     const dx = (this.mouseX - canvas.width / 2) / camera.zoom;
     const dy = (this.mouseY - canvas.height / 2) / camera.zoom;
-    return { x: player.x + dx, y: player.y + dy };
+    return { x: centerX + dx, y: centerY + dy };
   }
 
   drainCommands() {

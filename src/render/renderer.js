@@ -15,11 +15,11 @@ export class Renderer {
     this.canvas.height = window.innerHeight;
   }
 
-  followPlayer(player) {
-    if (!player) return;
-    this.camera.x = player.x;
-    this.camera.y = player.y;
-    this.camera.zoom = Math.max(0.4, 1 - player.mass / 500);
+  followPlayer(view) {
+    if (!view) return;
+    this.camera.x = view.x;
+    this.camera.y = view.y;
+    this.camera.zoom = Math.max(0.35, 1 - view.mass / 600);
   }
 
   draw() {
@@ -57,12 +57,20 @@ export class Renderer {
       ctx.fill();
     }
 
-    // Blobs
-    for (const b of world.blobs.values()) {
-      ctx.fillStyle = b.isPlayer ? '#9fff9f' : '#5fa05f';
+    // Blobs (sorted small-to-big so big ones cover small ones, classic agar look)
+    const sorted = [...world.blobs.values()].sort((a, b) => a.mass - b.mass);
+    for (const b of sorted) {
+      ctx.fillStyle = b.color;
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
       ctx.fill();
+      if (b.mass > 30) {
+        ctx.fillStyle = '#0a0f0a';
+        ctx.font = `${Math.max(10, b.radius * 0.4)}px system-ui`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(Math.round(b.mass), b.x, b.y);
+      }
     }
 
     ctx.restore();

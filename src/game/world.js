@@ -2,9 +2,11 @@
 // Keep this file free of any DOM / canvas / window references.
 
 import { Blob, Pellet } from './entities.js';
-import { applyPhotosynthesis, canEat, overlaps } from './rules.js';
+import { applyPhotosynthesis, canEat, overlaps, MIN_MASS } from './rules.js';
+import { decideBotMove } from '../ai/bot.js';
 
 const BASE_SPEED = 220; // px/sec for a tiny blob; scales down with size
+const SPLIT_COOLDOWN_MS = 8000;
 
 export class World {
   constructor({ width = 4000, height = 4000 } = {}) {
@@ -16,16 +18,37 @@ export class World {
     this.tickCount = 0;
   }
 
-  spawnPlayer(name) {
+  spawnPlayer(name, ownerId = 1) {
     const b = new Blob({
       x: this.width / 2,
       y: this.height / 2,
       mass: 20,
       name,
       isPlayer: true,
+      ownerId,
     });
     this.blobs.set(b.id, b);
     return b;
+  }
+
+  spawnBot(name) {
+    const b = new Blob({
+      x: Math.random() * this.width,
+      y: Math.random() * this.height,
+      mass: 15 + Math.random() * 25,
+      name,
+      isBot: true,
+    });
+    this.blobs.set(b.id, b);
+    return b;
+  }
+
+  getOwnedBlobs(ownerId) {
+    const out = [];
+    for (const b of this.blobs.values()) {
+      if (b.alive && b.ownerId === ownerId) out.push(b);
+    }
+    return out;
   }
 
   seedPellets(count) {
@@ -43,6 +66,11 @@ export class World {
     this.tickCount++;
     const now = Date.now();
 
+    // Bot brains decide targets first
+    for (const blob of this.blobs.values()) {
+      if (blob.isBot && blob.alive) decideBotMove(blob, this);
+    }
+
     for (const blob of this.blobs.values()) {
       if (!blob.alive) continue;
       this.moveBlob(blob, dt);
@@ -50,7 +78,43 @@ export class World {
     }
 
     this.handleEating();
+    this.mergeOwnedPieces();
+    this.respawnDeadBots();
     this.refillPellets();
+  }
+
+  executeCommand(ownerId, command) {
+    const owned = this.getOwnedBlobs(ownerId);
+    if (command.type === 'setTarget') {
+      for (const b of owned) {
+        b.targetX = command.x;
+        b.targetY = command.y;
+      }
+    } else if (command.type === 'split') {
+      const now = Date.now();
+      for (const b of [...owned]) {
+        if (b.mass < MIN_MASS * 2) continue;
+        b.mass /= 2;
+        const dx = b.targetX - b.x;
+        const dy = b.targetY - b.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const piece = new Blob({
+          x: b.x + (dx / len) * b.radius,
+          y: b.y + (dy / len) * b.radius,
+          mass: b.mass,
+          name: b.name,
+          isPlayer: b.isPlayer,
+          isBot: b.isBot,
+          ownerId: b.ownerId,
+          color: b.color,
+        });
+        piece.targetX = b.targetX;
+        piece.targetY = b.targetY;
+        piece.splitCooldown = now + SPLIT_COOLDOWN_MS;
+        b.splitCooldown = now + SPLIT_COOLDOWN_MS;
+        this.blobs.set(piece.id, piece);
+      }
+    }
   }
 
   moveBlob(blob, dt) {
@@ -84,7 +148,7 @@ export class World {
         }
       }
     }
-    // Blobs eat blobs
+    // Blobs eat blobs (skip same-owner pieces — those merge instead)
     const blobs = [...this.blobs.values()].filter((b) => b.alive);
     for (let i = 0; i < blobs.length; i++) {
       for (let j = 0; j < blobs.length; j++) {
@@ -92,12 +156,50 @@ export class World {
         const a = blobs[i];
         const b = blobs[j];
         if (!a.alive || !b.alive) continue;
+        if (a.ownerId !== null && a.ownerId === b.ownerId) continue;
         if (canEat(a, b) && overlaps(a, b, 0.6)) {
           a.mass += b.mass;
           b.alive = false;
           this.blobs.delete(b.id);
         }
       }
+    }
+  }
+
+  mergeOwnedPieces() {
+    const byOwner = new Map();
+    for (const b of this.blobs.values()) {
+      if (!b.alive || b.ownerId === null) continue;
+      if (!byOwner.has(b.ownerId)) byOwner.set(b.ownerId, []);
+      byOwner.get(b.ownerId).push(b);
+    }
+    const now = Date.now();
+    for (const pieces of byOwner.values()) {
+      if (pieces.length < 2) continue;
+      for (let i = 0; i < pieces.length; i++) {
+        for (let j = i + 1; j < pieces.length; j++) {
+          const a = pieces[i];
+          const b = pieces[j];
+          if (!a.alive || !b.alive) continue;
+          if (a.splitCooldown > now || b.splitCooldown > now) continue;
+          if (overlaps(a, b, 0.5)) {
+            a.mass += b.mass;
+            b.alive = false;
+            this.blobs.delete(b.id);
+          }
+        }
+      }
+    }
+  }
+
+  respawnDeadBots(targetCount = 20) {
+    let botCount = 0;
+    for (const b of this.blobs.values()) {
+      if (b.isBot && b.alive) botCount++;
+    }
+    while (botCount < targetCount) {
+      this.spawnBot(`bot-${this.tickCount}-${botCount}`);
+      botCount++;
     }
   }
 
