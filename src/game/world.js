@@ -43,6 +43,25 @@ export class World {
     this.seedThorns(9);
   }
 
+  // Fresh run: new map layout, new bots at starting sizes, clock back to noon.
+  // Mutates in place so renderer/transport references stay valid.
+  reset({ pellets = 500, bots = 20 } = {}) {
+    this.blobs.clear();
+    this.pellets.clear();
+    this.powerUps.clear();
+    this.thorns.clear();
+    this.zones = [];
+    this.events = [];
+    this.tickCount = 0;
+    this.time = 0;
+    this.lightLevel = 1;
+    this.nextPowerUpAt = Date.now() + 2000;
+    this.generateZones();
+    this.seedThorns(9);
+    this.seedPellets(pellets);
+    for (let i = 0; i < bots; i++) this.spawnBot();
+  }
+
   // ---- map generation ----
 
   generateZones() {

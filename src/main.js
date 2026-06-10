@@ -260,7 +260,11 @@ function startGame() {
   sound.init();
   sound.setMuted(profile.muted);
 
-  world.spawnPlayer({ name: profile.name, ownerId: PLAYER_OWNER_ID, color: profile.color, skin: profile.skin });
+  // Fresh run, fresh garden — otherwise survivors from past runs tower over a new spawn.
+  world.reset();
+  renderer.resetFx();
+  const playerBlob = world.spawnPlayer({ name: profile.name, ownerId: PLAYER_OWNER_ID, color: profile.color, skin: profile.skin });
+  renderer.setView({ x: playerBlob.x, y: playerBlob.y, mass: playerBlob.mass }, 0, true);
   run = {
     startedAt: performance.now(),
     startDay: world.day,

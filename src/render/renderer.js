@@ -64,6 +64,15 @@ export class Renderer {
     }
   }
 
+  // Clear per-blob cosmetic state (world was reset for a new run).
+  resetFx() {
+    this.particles.length = 0;
+    this.drawR.clear();
+    this.pulse.clear();
+    this.zoomKick = 0;
+    this.shake = 0;
+  }
+
   // ---- camera ----
 
   setView(view, dt, immediate = false) {
