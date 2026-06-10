@@ -1,9 +1,12 @@
 // Authoritative world state. Runs in the browser today; runs on a Node server later.
 // Keep this file free of any DOM / canvas / window references.
 
-import { Blob, Pellet, PowerUp, POWERUP_TYPES } from './entities.js';
-import { applyPhotosynthesis, canEat, overlaps, MIN_MASS } from './rules.js';
-import { decideBotMove } from '../ai/bot.js';
+import { Blob, Pellet, PowerUp, Thorn, POWERUP_TYPES } from './entities.js';
+import {
+  applyPhotosynthesis, canEat, overlaps, MIN_MASS,
+  THORN_POP_MASS, EJECT_MIN_MASS, EJECT_COST, EJECT_PELLET_MASS, EJECT_SPEED,
+} from './rules.js';
+import { decideBotMove, randomBotIdentity } from '../ai/bot.js';
 
 const BASE_SPEED = 220; // px/sec for a tiny blob; scales down with size
 const SPLIT_COOLDOWN_MS = 8000;
@@ -13,6 +16,8 @@ const POWERUP_CAP = 8;
 const MAGNET_RADIUS = 220;
 const WILT_RADIUS = 260;
 
+const DAY_LENGTH_SEC = 180; // full day/night cycle
+
 export class World {
   constructor({ width = 4000, height = 4000 } = {}) {
     this.width = width;
@@ -20,31 +25,115 @@ export class World {
     this.blobs = new Map();
     this.pellets = new Map();
     this.powerUps = new Map();
+    this.thorns = new Map();
+    this.zones = [];
     this.tickCount = 0;
+    this.time = 0; // accumulated seconds; drives the day/night cycle (starts at noon)
+    this.lightLevel = 1; // 0 = midnight, 1 = noon; recomputed each tick
+    this.events = []; // tick events for the client (particles, sound, stats); cleared each tick
+    this.nextBotOwner = 1;
     this.nextPowerUpAt = Date.now() + 2000;
+
+    this.generateZones();
+    this.seedThorns(9);
   }
 
-  spawnPlayer(name, ownerId = 1) {
+  // ---- map generation ----
+
+  generateZones() {
+    const place = (type, radius) => {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const x = radius + 120 + Math.random() * (this.width - 2 * radius - 240);
+        const y = radius + 120 + Math.random() * (this.height - 2 * radius - 240);
+        const crowded = this.zones.some((z) => Math.hypot(z.x - x, z.y - y) < (z.radius + radius) * 0.9);
+        if (!crowded) {
+          this.zones.push({ type, x, y, radius });
+          return;
+        }
+      }
+      this.zones.push({ type, x: Math.random() * this.width, y: Math.random() * this.height, radius });
+    };
+    for (let i = 0; i < 3; i++) place('grove', 320 + Math.random() * 100);
+    for (let i = 0; i < 2; i++) place('shade', 280 + Math.random() * 80);
+  }
+
+  seedThorns(count) {
+    for (let i = 0; i < count; i++) {
+      let x, y;
+      do {
+        x = 220 + Math.random() * (this.width - 440);
+        y = 220 + Math.random() * (this.height - 440);
+      } while (Math.hypot(x - this.width / 2, y - this.height / 2) < 450);
+      const t = new Thorn({ x, y });
+      this.thorns.set(t.id, t);
+    }
+  }
+
+  // Returns the zone containing (x, y), or null.
+  zoneAt(x, y) {
+    for (const z of this.zones) {
+      const dx = x - z.x;
+      const dy = y - z.y;
+      if (dx * dx + dy * dy < z.radius * z.radius) return z;
+    }
+    return null;
+  }
+
+  // ---- spawning ----
+
+  spawnPlayer({ name = 'you', ownerId = 1, color = '#7dffb0', skin = 'plain' } = {}) {
+    const spot = this.findSafeSpawn(20);
     const b = new Blob({
-      x: this.width / 2,
-      y: this.height / 2,
+      x: spot.x,
+      y: spot.y,
       mass: 20,
       name,
       isPlayer: true,
       ownerId,
+      color,
+      skin,
     });
+    b.effects.ghost = Date.now() + 3000; // spawn protection
     this.blobs.set(b.id, b);
     return b;
   }
 
-  spawnBot(name) {
+  findSafeSpawn(mass) {
+    const margin = 250;
+    for (let attempt = 0; attempt < 24; attempt++) {
+      const x = margin + Math.random() * (this.width - margin * 2);
+      const y = margin + Math.random() * (this.height - margin * 2);
+      let safe = true;
+      for (const b of this.blobs.values()) {
+        if (!b.alive) continue;
+        if (b.mass > mass * 1.2 && Math.hypot(b.x - x, b.y - y) < 500) {
+          safe = false;
+          break;
+        }
+      }
+      if (safe) return { x, y };
+    }
+    return { x: this.width / 2, y: this.height / 2 };
+  }
+
+  spawnBot(name = null, personality = null) {
+    let identity = randomBotIdentity();
+    // prefer a name not already swimming around
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const taken = [...this.blobs.values()].some((b) => b.alive && b.name === identity.name);
+      if (!taken) break;
+      identity = randomBotIdentity();
+    }
     const b = new Blob({
       x: Math.random() * this.width,
       y: Math.random() * this.height,
       mass: 15 + Math.random() * 25,
-      name,
+      name: name ?? identity.name,
       isBot: true,
+      ownerId: `b${this.nextBotOwner++}`,
+      personality: personality ?? identity.personality,
     });
+    b.effects.ghost = Date.now() + 3000; // spawn protection
     this.blobs.set(b.id, b);
     return b;
   }
@@ -67,10 +156,18 @@ export class World {
     }
   }
 
+  // ---- tick ----
+
   // Advance the world by `dt` seconds. Called from a requestAnimationFrame loop today.
   tick(dt) {
     this.tickCount++;
+    this.time += dt;
+    this.events = [];
     const now = Date.now();
+
+    // Day/night: cosine clock starting at noon. lightLevel 0..1 → photosynthesis 0.4x..1.6x.
+    this.lightLevel = 0.5 + 0.5 * Math.cos((2 * Math.PI * this.time) / DAY_LENGTH_SEC);
+    const lightMul = 0.4 + 1.2 * this.lightLevel;
 
     // Bot brains decide targets first
     for (const blob of this.blobs.values()) {
@@ -80,10 +177,14 @@ export class World {
     for (const blob of this.blobs.values()) {
       if (!blob.alive) continue;
       this.moveBlob(blob, dt);
-      applyPhotosynthesis(blob, dt, now);
+      const zone = this.zoneAt(blob.x, blob.y);
+      const zoneMul = zone ? (zone.type === 'grove' ? 2 : 0) : 1;
+      applyPhotosynthesis(blob, dt, now, { zoneMul, lightMul });
     }
 
-    this.handleEating();
+    this.movePellets(dt);
+    this.handleThorns(now);
+    this.handleEating(now);
     this.handlePowerUpPickups(now);
     this.applyAuras(now);
     this.applyMagnet(dt, now);
@@ -91,6 +192,71 @@ export class World {
     this.respawnDeadBots();
     this.refillPellets();
     this.maybeSpawnPowerUp(now);
+  }
+
+  pushEvent(e) {
+    if (this.events.length < 220) this.events.push(e);
+  }
+
+  movePellets(dt) {
+    const decay = Math.exp(-3.2 * dt);
+    for (const p of this.pellets.values()) {
+      if (p.vx === 0 && p.vy === 0) continue;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= decay;
+      p.vy *= decay;
+      if (Math.abs(p.vx) < 2 && Math.abs(p.vy) < 2) {
+        p.vx = 0;
+        p.vy = 0;
+      }
+      p.x = Math.max(4, Math.min(this.width - 4, p.x));
+      p.y = Math.max(4, Math.min(this.height - 4, p.y));
+    }
+  }
+
+  handleThorns(now) {
+    for (const blob of this.blobs.values()) {
+      if (!blob.alive || blob.mass <= THORN_POP_MASS || now < blob.thornImmune) continue;
+      for (const thorn of this.thorns.values()) {
+        if (overlaps(blob, thorn, 0.75)) {
+          this.popBlob(blob, thorn, now);
+          break;
+        }
+      }
+    }
+  }
+
+  // Burst a blob into pieces (thorn contact). Loses 15% mass; pieces scatter outward.
+  popBlob(blob, thorn, now) {
+    const pieces = Math.max(2, Math.min(5, Math.floor(blob.mass / 35)));
+    const keep = blob.mass * 0.85;
+    const each = keep / pieces;
+    blob.mass = each;
+    blob.splitCooldown = now + SPLIT_COOLDOWN_MS;
+    blob.thornImmune = now + 1500;
+    this.pushEvent({ type: 'pop', x: blob.x, y: blob.y, color: blob.color, ownerId: blob.ownerId, mass: keep });
+    for (let i = 1; i < pieces; i++) {
+      const angle = (i / pieces) * Math.PI * 2 + Math.random() * 0.6;
+      const dist = thorn.radius + Math.sqrt(each) * 4 + 30;
+      const piece = new Blob({
+        x: Math.max(10, Math.min(this.width - 10, thorn.x + Math.cos(angle) * dist)),
+        y: Math.max(10, Math.min(this.height - 10, thorn.y + Math.sin(angle) * dist)),
+        mass: each,
+        name: blob.name,
+        isPlayer: blob.isPlayer,
+        isBot: blob.isBot,
+        ownerId: blob.ownerId,
+        color: blob.color,
+        skin: blob.skin,
+        personality: blob.personality,
+      });
+      piece.targetX = thorn.x + Math.cos(angle) * (dist + 300);
+      piece.targetY = thorn.y + Math.sin(angle) * (dist + 300);
+      piece.splitCooldown = now + SPLIT_COOLDOWN_MS;
+      piece.thornImmune = now + 1500;
+      this.blobs.set(piece.id, piece);
+    }
   }
 
   maybeSpawnPowerUp(now) {
@@ -116,6 +282,7 @@ export class World {
         if (overlaps(blob, pu, 1.1)) {
           blob.effects[pu.type] = now + POWERUP_DURATION_MS;
           this.powerUps.delete(pid);
+          this.pushEvent({ type: 'powerup', x: pu.x, y: pu.y, ptype: pu.type, ownerId: blob.ownerId });
         }
       }
     }
@@ -169,6 +336,7 @@ export class World {
       }
     } else if (command.type === 'split') {
       const now = Date.now();
+      let split = false;
       for (const b of [...owned]) {
         if (b.mass < MIN_MASS * 2) continue;
         b.mass /= 2;
@@ -184,12 +352,39 @@ export class World {
           isBot: b.isBot,
           ownerId: b.ownerId,
           color: b.color,
+          skin: b.skin,
+          personality: b.personality,
         });
         piece.targetX = b.targetX;
         piece.targetY = b.targetY;
         piece.splitCooldown = now + SPLIT_COOLDOWN_MS;
         b.splitCooldown = now + SPLIT_COOLDOWN_MS;
         this.blobs.set(piece.id, piece);
+        split = true;
+      }
+      if (split && owned[0]) {
+        this.pushEvent({ type: 'split', x: owned[0].x, y: owned[0].y, ownerId });
+      }
+    } else if (command.type === 'eject') {
+      for (const b of owned) {
+        if (b.mass < EJECT_MIN_MASS) continue;
+        b.mass -= EJECT_COST;
+        const dx = b.targetX - b.x;
+        const dy = b.targetY - b.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const nx = dx / len;
+        const ny = dy / len;
+        const p = new Pellet({
+          x: b.x + nx * (b.radius + 8),
+          y: b.y + ny * (b.radius + 8),
+          mass: EJECT_PELLET_MASS,
+          tint: 0,
+          color: b.color,
+        });
+        p.vx = nx * EJECT_SPEED;
+        p.vy = ny * EJECT_SPEED;
+        this.pellets.set(p.id, p);
+        this.pushEvent({ type: 'eject', x: p.x, y: p.y, color: b.color, ownerId });
       }
     }
   }
@@ -198,7 +393,9 @@ export class World {
     const dx = blob.targetX - blob.x;
     const dy = blob.targetY - blob.y;
     const dist = Math.hypot(dx, dy);
-    if (dist < 1) {
+    // Stop radius scales with size so parking the cursor on yourself means "be still and grow".
+    const stopRadius = Math.max(8, blob.radius * 0.4);
+    if (dist < stopRadius) {
       blob.vx = 0;
       blob.vy = 0;
       return;
@@ -214,7 +411,7 @@ export class World {
     blob.y = Math.max(blob.radius, Math.min(this.height - blob.radius, blob.y));
   }
 
-  handleEating() {
+  handleEating(now) {
     // Blobs eat pellets
     for (const blob of this.blobs.values()) {
       if (!blob.alive) continue;
@@ -222,6 +419,15 @@ export class World {
         if (overlaps(blob, pellet, 0.9)) {
           blob.mass += pellet.mass;
           this.pellets.delete(pid);
+          this.pushEvent({
+            type: 'eat-pellet',
+            x: pellet.x,
+            y: pellet.y,
+            tint: pellet.tint,
+            color: pellet.color,
+            mass: pellet.mass,
+            ownerId: blob.ownerId,
+          });
         }
       }
     }
@@ -236,13 +442,25 @@ export class World {
         if (a.ownerId !== null && a.ownerId === b.ownerId) continue;
         if (canEat(a, b) && overlaps(a, b, 0.6)) {
           // Shield blocks one fatal hit, then pops.
-          if (b.effects.shield && b.effects.shield > Date.now()) {
+          if (b.effects.shield && b.effects.shield > now) {
             delete b.effects.shield;
+            this.pushEvent({ type: 'shield-pop', x: b.x, y: b.y, ownerId: b.ownerId });
             continue;
           }
           a.mass += b.mass;
           b.alive = false;
           this.blobs.delete(b.id);
+          this.pushEvent({
+            type: 'eat-blob',
+            x: b.x,
+            y: b.y,
+            color: b.color,
+            mass: b.mass,
+            eaterOwnerId: a.ownerId,
+            eaterName: a.name,
+            victimOwnerId: b.ownerId,
+            victimName: b.name,
+          });
         }
       }
     }
@@ -268,6 +486,7 @@ export class World {
             a.mass += b.mass;
             b.alive = false;
             this.blobs.delete(b.id);
+            this.pushEvent({ type: 'merge', x: a.x, y: a.y, ownerId: a.ownerId });
           }
         }
       }
@@ -275,13 +494,13 @@ export class World {
   }
 
   respawnDeadBots(targetCount = 20) {
-    let botCount = 0;
+    const owners = new Set();
     for (const b of this.blobs.values()) {
-      if (b.isBot && b.alive) botCount++;
+      if (b.isBot && b.alive) owners.add(b.ownerId);
     }
-    while (botCount < targetCount) {
-      this.spawnBot(`bot-${this.tickCount}-${botCount}`);
-      botCount++;
+    while (owners.size < targetCount) {
+      const bot = this.spawnBot();
+      owners.add(bot.ownerId);
     }
   }
 

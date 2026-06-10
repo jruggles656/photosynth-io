@@ -1,10 +1,16 @@
 // Pure rule functions. No mutation of outside state, no side effects.
 // Easy to unit-test, easy to reuse on a server.
 
-export const PHOTO_GAIN_PER_SEC = 1.0;      // mass/sec when stationary
+export const PHOTO_GAIN_PER_SEC = 1.0;      // base mass/sec when stationary
 export const MOVE_COST_PER_SEC = 0.2;       // mass/sec when moving
 export const MIN_MASS = 10;                 // floor — can't shrink below this
 export const EAT_RATIO = 1.25;              // must be 25% bigger to eat
+
+export const THORN_POP_MASS = 110;          // blobs above this burst on thorn contact
+export const EJECT_MIN_MASS = 30;           // can't eject below this
+export const EJECT_COST = 4;                // mass lost per eject
+export const EJECT_PELLET_MASS = 3;         // mass of the ejected pellet
+export const EJECT_SPEED = 520;             // initial velocity of ejected mass
 
 // Does blob A eat blob B?
 export function canEat(a, b) {
@@ -23,7 +29,10 @@ export function overlaps(a, b, factor = 1) {
 }
 
 // Apply photosynthesis / movement tax to a blob over `dt` seconds.
-export function applyPhotosynthesis(blob, dt, now = Date.now()) {
+// mods.zoneMul — terrain multiplier (sun grove ×2, shade ×0)
+// mods.lightMul — day/night multiplier (computed by World from its clock)
+export function applyPhotosynthesis(blob, dt, now = Date.now(), mods = {}) {
+  const { zoneMul = 1, lightMul = 1 } = mods;
   const moving = Math.hypot(blob.vx, blob.vy) > 1;
   const bloomActive = blob.effects.bloom && blob.effects.bloom > now;
   const wiltedBy = blob.wiltedUntil && blob.wiltedUntil > now;
@@ -33,7 +42,7 @@ export function applyPhotosynthesis(blob, dt, now = Date.now()) {
     const tax = MOVE_COST_PER_SEC * (wiltedBy ? 2 : 1);
     delta = -tax * dt;
   } else {
-    const gain = PHOTO_GAIN_PER_SEC * (bloomActive ? 3 : 1);
+    const gain = PHOTO_GAIN_PER_SEC * (bloomActive ? 3 : 1) * zoneMul * lightMul;
     delta = gain * dt;
   }
 
