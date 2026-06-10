@@ -14,6 +14,25 @@ The economy is shaped by three more layers:
 - **Sun groves** — golden pools where photosynthesis runs ×2, but everyone can see you glowing.
 - **Shade pools** — no photosynthesis, but you're invisible to anything beyond close range.
 
+## The run has an arc
+
+Every dawn the garden escalates:
+
+- **Day 2** — elite hunters (Blight, Canker…) wake up. They're faster than anything else alive, they hunt *you* specifically, and they show on the minimap in red.
+- **Day 3** — **the Elder blooms**: a huge golden ancient that drifts between groves, consuming what's in its path. **Eat it and you win** — outgrow it, or pop it with thorn artillery and devour the pieces. The garden blooms; "Overgrowth" difficulty tiers unlock for the next run (more thorns, hungrier decay, extra elites, a bigger Elder).
+- **Day 4+** — another elite wakes every dawn. The garden never relents.
+
+**Frenzy:** chain kills within 6 seconds and each one is worth more (up to ×1.75).
+
+**Thorn artillery:** feed a thorn bush 5 ejected pellets (W) and it fires a new thorn in that direction — popping any giant in the way. The underdog's siege weapon.
+
+**Legacy:** when you die, your peak mass seeds gold pellets into your next spawn. Death fertilizes the next life.
+
+## Modes
+
+- **Free play** — random garden each run, with your selected Overgrowth level.
+- **Daily garden** — one seeded layout per calendar day (same zones, thorns, and starting bots for every attempt); your best mass for the day is tracked.
+
 ## Hazards & power-ups
 
 **Thorn bushes** dot the map. Blobs above 110 mass that touch one burst into pieces (and lose 15%). Small blobs can shelter under them.
@@ -60,8 +79,9 @@ Movement is liquid, agar.io-style: cursor distance is the throttle. Far cursor =
 
 ## Meta
 
-- **Missions** — three active at a time (short/medium/long), Jetpack Joyride-style: "survive a full night", "pounce-kill 2 blobs", "become #1". Completing one earns a star and slots in a new mission; near-misses show on the death screen.
-- **Skins** — five membrane patterns unlock at personal-best mass milestones (80/150/250/400)
+- **Missions** — three active at a time (short/medium/long), Jetpack Joyride-style: "survive a full night", "pounce-kill 2 blobs", "consume the Elder". Completing one earns a star and slots in a new mission; near-misses show on the death screen.
+- **Skins** — five membrane patterns unlock at personal-best mass milestones (80/150/250/400), plus two condition skins: **Crown** (eat the reigning #1) and **Verdant** (eat the Elder)
+- **PWA** — installable from the browser (Add to Home Screen); manifest + icons included
 - **Personal bests** — peak mass, longest life, and lives are stored locally
 - **Death report** — survival time, peak mass, kills, pellets, and who ate you
 - All audio is synthesized with the Web Audio API — no sound files

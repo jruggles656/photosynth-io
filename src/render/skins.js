@@ -7,11 +7,16 @@ export const SKINS = [
   { id: 'rings',   name: 'Ripple',  unlock: 150 },
   { id: 'stripes', name: 'Tendril', unlock: 250 },
   { id: 'aurora',  name: 'Aurora',  unlock: 400 },
+  // Condition skins — earned by feats, not mass
+  { id: 'crown',   name: 'Crown',   flag: 'crownKill', hint: 'eat the #1' },
+  { id: 'verdant', name: 'Verdant', flag: 'elderWin',  hint: 'eat the Elder' },
 ];
 
-export function isUnlocked(skinId, bestMass) {
-  const s = SKINS.find((s) => s.id === skinId);
-  return s ? bestMass >= s.unlock : false;
+// Mass-milestone skins check personal-best mass; condition skins check a
+// boolean feat flag stored on the bests record.
+export function skinUnlocked(skin, bests) {
+  if (skin.flag) return !!bests[skin.flag];
+  return (bests.peakMass ?? 0) >= skin.unlock;
 }
 
 // Draw a skin pattern. Assumes ctx is translated to the blob center and
@@ -57,6 +62,60 @@ export function drawSkinPattern(ctx, skinId, r, t, seed) {
         ctx.arc(0, r * i * 0.55, r * 0.9, Math.PI * 0.15, Math.PI * 0.85);
         ctx.stroke();
       }
+      ctx.restore();
+      break;
+    }
+    case 'crown': {
+      // golden zigzag diadem orbiting the membrane
+      ctx.save();
+      ctx.rotate(t * 0.2 + seed);
+      ctx.strokeStyle = 'rgba(255,216,122,0.55)';
+      ctx.lineWidth = Math.max(1.5, r * 0.06);
+      ctx.beginPath();
+      const points = 7;
+      for (let i = 0; i <= points * 2; i++) {
+        const a = (i / (points * 2)) * Math.PI * 2;
+        const rr = i % 2 === 0 ? r * 0.62 : r * 0.82;
+        const px = Math.cos(a) * rr;
+        const py = Math.sin(a) * rr;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,216,122,0.4)';
+      for (let i = 0; i < points; i++) {
+        const a = (i / points) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * r * 0.82, Math.sin(a) * r * 0.82, r * 0.05, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      break;
+    }
+    case 'verdant': {
+      // leaf veins radiating from the core — the Elder's mark
+      ctx.save();
+      ctx.rotate(seed + t * 0.1);
+      ctx.strokeStyle = 'rgba(190,255,190,0.3)';
+      ctx.lineWidth = Math.max(1, r * 0.035);
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.quadraticCurveTo(
+          Math.cos(a + 0.45) * r * 0.55,
+          Math.sin(a + 0.45) * r * 0.55,
+          Math.cos(a) * r * 0.92,
+          Math.sin(a) * r * 0.92
+        );
+        ctx.stroke();
+      }
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      g.addColorStop(0, 'rgba(255,216,122,0.18)');
+      g.addColorStop(1, 'rgba(255,216,122,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(-r, -r, r * 2, r * 2);
       ctx.restore();
       break;
     }

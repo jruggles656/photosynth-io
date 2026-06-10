@@ -9,6 +9,9 @@ Key tuning facts (researched against agar.io's actual numbers — see git histor
 - Economy: 0.2%/s proportional decay on everything + proportional move tax — photosynthesis alone caps out ~500-800 mass; the leader must hunt. Big victims scatter 20% of mass as pellets (corpse economy → bot feeding frenzies).
 - Bots: 180-400ms reaction time, rooted blobs read as flora (ambush hunting), hunters split-pounce at 2.8x advantage and see 30% further at night.
 - Missions: Jetpack Joyride model — 3 active (short/medium/long tiers), pool in main.js, persisted with stars in localStorage.
+- Run arc: dawn escalation in world.tick (day 2 elites stalk the player, day 3 the Elder spawns; eat its last piece = win → 'won' state + Overgrowth tiers via world modifiers). Frenzy kill-chains (×1.25/step), thorn artillery (5 ejected pellets → fired thorn), legacy gold (death seeds next spawn).
+- Daily garden: mulberry32-seeded world generation (zones/thorns/pellets/bot identities) keyed to the date; in-run randomness stays unseeded. Free play passes seed null.
+- PWA: public/manifest.webmanifest + icon.svg + PNGs (regenerate via qlmanage/sips if the SVG changes).
 
 Vanilla JS + HTML5 Canvas, Vite for tooling, deploys to GitHub Pages. Aesthetic: bioluminescent abyssal garden — Fraunces (display) + Spline Sans Mono (UI), palette in `:root` CSS vars in index.html.
 

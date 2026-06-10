@@ -34,6 +34,10 @@ export class Blob {
     this.effects = {}; // active power-ups: { speed: expiresAt, shield: ..., bloom: ..., etc. }
     this.wiltedUntil = 0; // set by enemy Wilt auras; checked in rules.applyPhotosynthesis
     this.thornImmune = 0; // brief immunity after popping on a thorn
+    this.isElite = false; // dawn-of-day-2 hunters that stalk the player
+    this.isElder = false; // the boss — eat it to win the run
+    this.frenzy = 1; // kill-chain multiplier (eat blobs in quick succession)
+    this.lastKillAt = 0;
     this.splitCooldown = 0;
     this.seed = Math.random() * Math.PI * 2; // per-blob animation phase (render-only use)
     this.alive = true;
@@ -45,7 +49,7 @@ export class Blob {
 }
 
 export class Pellet {
-  constructor({ x, y, mass = 2, tint = null, color = null }) {
+  constructor({ x, y, mass = 2, tint = null, color = null, ejected = false }) {
     this.id = newId();
     this.x = x;
     this.y = y;
@@ -56,6 +60,7 @@ export class Pellet {
     this.tint = tint ?? (Math.random() < 0.05 ? 3 : Math.floor(Math.random() * 3));
     if (this.tint === 3 && mass === 2) this.mass = 6;
     this.color = color;
+    this.ejected = ejected; // only ejected mass feeds thorn bushes
   }
 
   get radius() {
@@ -80,12 +85,16 @@ export class PowerUp {
 }
 
 // Thorn bush — the hazard. Blobs above THORN_POP_MASS that touch one burst into pieces.
-// Small blobs can shelter under it.
+// Small blobs can shelter under it. Feed one 5 ejected pellets and it fires a
+// new thorn in that direction — the underdog's artillery.
 export class Thorn {
   constructor({ x, y }) {
     this.id = newId();
     this.x = x;
     this.y = y;
+    this.vx = 0; // fired thorns fly until friction stops them
+    this.vy = 0;
+    this.fed = 0; // ejected pellets absorbed toward the next shot
     this.seed = Math.random() * Math.PI * 2;
   }
 

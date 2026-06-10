@@ -10,6 +10,11 @@ export const EAT_RATIO = 1.25;              // must be 25% bigger to eat
 export const CORPSE_SCATTER_MASS = 80;      // victims above this scatter 20% of their mass as pellets
 
 export const THORN_POP_MASS = 110;          // blobs above this burst on thorn contact
+export const THORN_FEED_COUNT = 5;          // ejected pellets to make a thorn fire
+export const THORN_SHOT_SPEED = 520;        // launch speed of a fired thorn
+
+export const FRENZY_WINDOW_MS = 6000;       // kill-chain window
+export const FRENZY_MAX = 4;                // frenzy 4 = ×1.75 mass from kills
 export const EJECT_MIN_MASS = 30;           // can't eject below this
 export const EJECT_COST = 4;                // mass lost per eject
 export const EJECT_PELLET_MASS = 3;         // mass of the ejected pellet
@@ -39,12 +44,12 @@ export function overlaps(a, b, factor = 1) {
 // natural ceiling (~mass 500-800 at noon) — past that, you must hunt or shrink.
 // Small blobs barely feel decay; the leader is on a treadmill.
 export function applyPhotosynthesis(blob, dt, now = Date.now(), mods = {}) {
-  const { zoneMul = 1, lightMul = 1 } = mods;
+  const { zoneMul = 1, lightMul = 1, decayMul = 1 } = mods;
   const moving = Math.hypot(blob.vx, blob.vy) > 1;
   const bloomActive = blob.effects.bloom && blob.effects.bloom > now;
   const wiltedBy = blob.wiltedUntil && blob.wiltedUntil > now;
 
-  const decay = blob.mass * DECAY_RATE;
+  const decay = blob.mass * DECAY_RATE * decayMul;
   let delta;
   if (moving) {
     const tax = Math.max(MOVE_COST_MIN, blob.mass * MOVE_TAX_RATE) * (wiltedBy ? 2 : 1);

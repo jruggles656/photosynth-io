@@ -4,9 +4,21 @@
 import { Blob, Pellet, PowerUp, Thorn, POWERUP_TYPES } from './entities.js';
 import {
   applyPhotosynthesis, canEat, overlaps, MIN_MASS, CORPSE_SCATTER_MASS,
-  THORN_POP_MASS, EJECT_MIN_MASS, EJECT_COST, EJECT_PELLET_MASS, EJECT_SPEED,
+  THORN_POP_MASS, THORN_FEED_COUNT, THORN_SHOT_SPEED, FRENZY_WINDOW_MS, FRENZY_MAX,
+  EJECT_MIN_MASS, EJECT_COST, EJECT_PELLET_MASS, EJECT_SPEED,
 } from './rules.js';
-import { decideBotMove, randomBotIdentity } from '../ai/bot.js';
+import { decideBotMove, randomBotIdentity, ELITE_NAMES } from '../ai/bot.js';
+
+// Deterministic RNG for daily-garden mode (same seed → same map layout).
+function mulberry32(a) {
+  return function () {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 // Speed: agar.io's curve — maxSpeed ∝ radius^-0.449 (≈ mass^-0.22). Doubling
 // mass costs ~14% speed, so growing feels gradual instead of crippling.
@@ -24,7 +36,7 @@ const WILT_RADIUS = 260;
 const DAY_LENGTH_SEC = 180; // full day/night cycle
 
 export class World {
-  constructor({ width = 4000, height = 4000 } = {}) {
+  constructor({ width = 4000, height = 4000, seed = null, modifiers = {} } = {}) {
     this.width = width;
     this.height = height;
     this.blobs = new Map();
@@ -38,14 +50,18 @@ export class World {
     this.events = []; // tick events for the client (particles, sound, stats); cleared each tick
     this.nextBotOwner = 1;
     this.nextPowerUpAt = Date.now() + 2000;
+    this.rand = seed != null ? mulberry32(seed) : Math.random;
+    this.modifiers = { decayMul: 1, thorns: 9, elites: 2, elderMass: 450, ...modifiers };
+    this.lastDay = 1; // escalation clock — dawn events fire when this advances
+    this.elderSpawned = false;
 
     this.generateZones();
-    this.seedThorns(9);
+    this.seedThorns(this.modifiers.thorns);
   }
 
   // Fresh run: new map layout, new bots at starting sizes, clock back to noon.
   // Mutates in place so renderer/transport references stay valid.
-  reset({ pellets = 500, bots = 20 } = {}) {
+  reset({ pellets = 500, bots = 20, seed = null, modifiers = {} } = {}) {
     this.blobs.clear();
     this.pellets.clear();
     this.powerUps.clear();
@@ -56,8 +72,12 @@ export class World {
     this.time = 0;
     this.lightLevel = 1;
     this.nextPowerUpAt = Date.now() + 2000;
+    this.rand = seed != null ? mulberry32(seed) : Math.random;
+    this.modifiers = { decayMul: 1, thorns: 9, elites: 2, elderMass: 450, ...modifiers };
+    this.lastDay = 1;
+    this.elderSpawned = false;
     this.generateZones();
-    this.seedThorns(9);
+    this.seedThorns(this.modifiers.thorns);
     this.seedPellets(pellets);
     for (let i = 0; i < bots; i++) this.spawnBot();
   }
@@ -67,35 +87,36 @@ export class World {
   generateZones() {
     const place = (type, radius) => {
       for (let attempt = 0; attempt < 12; attempt++) {
-        const x = radius + 120 + Math.random() * (this.width - 2 * radius - 240);
-        const y = radius + 120 + Math.random() * (this.height - 2 * radius - 240);
+        const x = radius + 120 + this.rand() * (this.width - 2 * radius - 240);
+        const y = radius + 120 + this.rand() * (this.height - 2 * radius - 240);
         const crowded = this.zones.some((z) => Math.hypot(z.x - x, z.y - y) < (z.radius + radius) * 0.9);
         if (!crowded) {
           this.zones.push({ type, x, y, radius });
           return;
         }
       }
-      this.zones.push({ type, x: Math.random() * this.width, y: Math.random() * this.height, radius });
+      this.zones.push({ type, x: this.rand() * this.width, y: this.rand() * this.height, radius });
     };
-    for (let i = 0; i < 3; i++) place('grove', 320 + Math.random() * 100);
-    for (let i = 0; i < 2; i++) place('shade', 280 + Math.random() * 80);
+    for (let i = 0; i < 3; i++) place('grove', 320 + this.rand() * 100);
+    for (let i = 0; i < 2; i++) place('shade', 280 + this.rand() * 80);
   }
 
   seedThorns(count) {
     for (let i = 0; i < count; i++) {
       let x, y;
       do {
-        x = 220 + Math.random() * (this.width - 440);
-        y = 220 + Math.random() * (this.height - 440);
+        x = 220 + this.rand() * (this.width - 440);
+        y = 220 + this.rand() * (this.height - 440);
       } while (Math.hypot(x - this.width / 2, y - this.height / 2) < 450);
       const t = new Thorn({ x, y });
       this.thorns.set(t.id, t);
     }
   }
 
-  // Day number, starting at 1. One full cycle = DAY_LENGTH_SEC.
+  // Day number, starting at 1. Day boundaries fall at dawn (light rising
+  // through 0.5), not noon — so "day 2" begins as the sun comes up.
   get day() {
-    return Math.floor(this.time / DAY_LENGTH_SEC) + 1;
+    return Math.floor((this.time + DAY_LENGTH_SEC / 4) / DAY_LENGTH_SEC) + 1;
   }
 
   // Scatter pellets where a big blob died — the comeback fund.
@@ -113,6 +134,21 @@ export class World {
       });
       p.vx = Math.cos(angle) * (120 + Math.random() * 220);
       p.vy = Math.sin(angle) * (120 + Math.random() * 220);
+      this.pellets.set(p.id, p);
+    }
+  }
+
+  // Gold pellets sown near a fresh spawn — the previous life's legacy.
+  seedLegacyGold(x, y, count) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = 120 + Math.random() * 240;
+      const p = new Pellet({
+        x: Math.max(4, Math.min(this.width - 4, x + Math.cos(a) * d)),
+        y: Math.max(4, Math.min(this.height - 4, y + Math.sin(a) * d)),
+        mass: 6,
+        tint: 3,
+      });
       this.pellets.set(p.id, p);
     }
   }
@@ -165,17 +201,17 @@ export class World {
   }
 
   spawnBot(name = null, personality = null) {
-    let identity = randomBotIdentity();
+    let identity = randomBotIdentity(this.rand);
     // prefer a name not already swimming around
     for (let attempt = 0; attempt < 6; attempt++) {
       const taken = [...this.blobs.values()].some((b) => b.alive && b.name === identity.name);
       if (!taken) break;
-      identity = randomBotIdentity();
+      identity = randomBotIdentity(this.rand);
     }
     const b = new Blob({
-      x: Math.random() * this.width,
-      y: Math.random() * this.height,
-      mass: 15 + Math.random() * 25,
+      x: this.rand() * this.width,
+      y: this.rand() * this.height,
+      mass: 15 + this.rand() * 25,
       name: name ?? identity.name,
       isBot: true,
       ownerId: `b${this.nextBotOwner++}`,
@@ -184,6 +220,45 @@ export class World {
     b.effects.ghost = Date.now() + 3000; // spawn protection
     this.blobs.set(b.id, b);
     return b;
+  }
+
+  // Dawn of day 2: elite hunters wake up. They stalk the player specifically.
+  spawnElites(count) {
+    for (let i = 0; i < count; i++) {
+      const spot = this.findSafeSpawn(60);
+      const b = new Blob({
+        x: spot.x,
+        y: spot.y,
+        mass: 70,
+        name: ELITE_NAMES[i % ELITE_NAMES.length],
+        isBot: true,
+        ownerId: `b${this.nextBotOwner++}`,
+        color: '#ff6e8a',
+        personality: 'elite',
+      });
+      b.isElite = true;
+      b.effects.ghost = Date.now() + 3000;
+      this.blobs.set(b.id, b);
+    }
+  }
+
+  // Dawn of day 3: the Elder blooms in a grove. Eat it (whole, or pop it with
+  // thorn artillery and eat the pieces) to win the run.
+  spawnElder() {
+    this.elderSpawned = true;
+    const grove = this.zones.find((z) => z.type === 'grove') ?? { x: this.width / 2, y: this.height / 2 };
+    const b = new Blob({
+      x: grove.x,
+      y: grove.y,
+      mass: this.modifiers.elderMass,
+      name: 'the Elder',
+      isBot: true,
+      ownerId: `b${this.nextBotOwner++}`,
+      color: '#ffd87a',
+      personality: 'elder',
+    });
+    b.isElder = true;
+    this.blobs.set(b.id, b);
   }
 
   getOwnedBlobs(ownerId) {
@@ -197,8 +272,9 @@ export class World {
   seedPellets(count) {
     for (let i = 0; i < count; i++) {
       const p = new Pellet({
-        x: Math.random() * this.width,
-        y: Math.random() * this.height,
+        x: this.rand() * this.width,
+        y: this.rand() * this.height,
+        tint: this.rand() < 0.05 ? 3 : Math.floor(this.rand() * 3),
       });
       this.pellets.set(p.id, p);
     }
@@ -216,6 +292,15 @@ export class World {
     // Day/night: cosine clock starting at noon. lightLevel 0..1 → photosynthesis 0.4x..1.6x.
     this.lightLevel = 0.5 + 0.5 * Math.cos((2 * Math.PI * this.time) / DAY_LENGTH_SEC);
     const lightMul = 0.4 + 1.2 * this.lightLevel;
+
+    // Escalation clock: each dawn the garden gets meaner.
+    if (this.day !== this.lastDay) {
+      this.lastDay = this.day;
+      this.pushEvent({ type: 'dawn', day: this.day });
+      if (this.day === 2) this.spawnElites(this.modifiers.elites);
+      if (this.day === 3 && !this.elderSpawned) this.spawnElder();
+      if (this.day > 3) this.spawnElites(1); // the garden never relents
+    }
 
     // Bot brains decide targets first
     for (const blob of this.blobs.values()) {
@@ -235,10 +320,12 @@ export class World {
       this.moveBlob(blob, dt);
       const zone = this.zoneAt(blob.x, blob.y);
       const zoneMul = zone ? (zone.type === 'grove' ? 2 : 0) : 1;
-      applyPhotosynthesis(blob, dt, now, { zoneMul, lightMul });
+      applyPhotosynthesis(blob, dt, now, { zoneMul, lightMul, decayMul: this.modifiers.decayMul });
     }
 
     this.movePellets(dt);
+    this.moveThorns(dt);
+    this.feedThorns();
     this.handleThorns(now);
     this.handleEating(now);
     this.handlePowerUpPickups(now);
@@ -268,6 +355,61 @@ export class World {
       }
       p.x = Math.max(4, Math.min(this.width - 4, p.x));
       p.y = Math.max(4, Math.min(this.height - 4, p.y));
+    }
+  }
+
+  // Fired thorns glide until friction stops them, popping big blobs en route.
+  moveThorns(dt) {
+    const decay = Math.exp(-1.2 * dt);
+    for (const th of this.thorns.values()) {
+      if (th.vx === 0 && th.vy === 0) continue;
+      th.x += th.vx * dt;
+      th.y += th.vy * dt;
+      th.vx *= decay;
+      th.vy *= decay;
+      if (Math.hypot(th.vx, th.vy) < 12) {
+        th.vx = 0;
+        th.vy = 0;
+      }
+      th.x = Math.max(60, Math.min(this.width - 60, th.x));
+      th.y = Math.max(60, Math.min(this.height - 60, th.y));
+    }
+  }
+
+  // Ejected mass feeds thorns; the fifth pellet makes the bush fire a new
+  // thorn in that pellet's direction — artillery for the small and clever.
+  feedThorns() {
+    for (const [pid, p] of this.pellets) {
+      if (!p.ejected) continue;
+      for (const th of this.thorns.values()) {
+        const dx = p.x - th.x;
+        const dy = p.y - th.y;
+        if (dx * dx + dy * dy > th.radius * th.radius) continue;
+        const speed = Math.hypot(p.vx, p.vy);
+        const dirX = speed > 20 ? p.vx / speed : Math.cos(th.seed);
+        const dirY = speed > 20 ? p.vy / speed : Math.sin(th.seed);
+        this.pellets.delete(pid);
+        th.fed++;
+        this.pushEvent({ type: 'thorn-fed', x: th.x, y: th.y, fed: th.fed });
+        if (th.fed >= THORN_FEED_COUNT) {
+          th.fed = 0;
+          const shot = new Thorn({ x: th.x + dirX * (th.radius + 30), y: th.y + dirY * (th.radius + 30) });
+          shot.vx = dirX * THORN_SHOT_SPEED;
+          shot.vy = dirY * THORN_SHOT_SPEED;
+          this.thorns.set(shot.id, shot);
+          this.pushEvent({ type: 'thorn-fire', x: th.x, y: th.y, dirX, dirY });
+          // cap the bush count — retire the oldest rooted thorn
+          if (this.thorns.size > 24) {
+            for (const [tid, old] of this.thorns) {
+              if (old.vx === 0 && old.vy === 0) {
+                this.thorns.delete(tid);
+                break;
+              }
+            }
+          }
+        }
+        break;
+      }
     }
   }
 
@@ -307,6 +449,8 @@ export class World {
         skin: blob.skin,
         personality: blob.personality,
       });
+      piece.isElder = blob.isElder;
+      piece.isElite = blob.isElite;
       piece.targetX = thorn.x + Math.cos(angle) * (dist + 300);
       piece.targetY = thorn.y + Math.sin(angle) * (dist + 300);
       piece.ix = Math.cos(angle) * POP_SCATTER;
@@ -440,6 +584,7 @@ export class World {
           mass: EJECT_PELLET_MASS,
           tint: 0,
           color: b.color,
+          ejected: true,
         });
         p.vx = nx * EJECT_SPEED;
         p.vy = ny * EJECT_SPEED;
@@ -459,7 +604,8 @@ export class World {
     // no discrete stopped state — parking the cursor on yourself IS the stop.
     const band = Math.max(40, blob.radius * 1.4);
     const throttle = Math.min(1, dist / band);
-    const speedMul = blob.effects.speed && blob.effects.speed > Date.now() ? 1.5 : 1;
+    let speedMul = blob.effects.speed && blob.effects.speed > Date.now() ? 1.5 : 1;
+    if (blob.isElite) speedMul *= 1.18; // elites run hot
     const maxSpeed = (SPEED_K / Math.pow(blob.radius, SPEED_RADIUS_EXP)) * speedMul;
     const desiredSpeed = maxSpeed * throttle;
     const desiredVx = dist > 0.5 ? (dx / dist) * desiredSpeed : 0;
@@ -535,6 +681,10 @@ export class World {
             gained = b.mass * 0.8;
             this.scatterCorpse(b);
           }
+          // Frenzy: chained kills multiply the take (×1.25 per chain step, max ×1.75).
+          a.frenzy = now - a.lastKillAt < FRENZY_WINDOW_MS ? Math.min(FRENZY_MAX, a.frenzy + 1) : 1;
+          a.lastKillAt = now;
+          gained *= 1 + 0.25 * (a.frenzy - 1);
           a.mass += gained;
           b.alive = false;
           this.blobs.delete(b.id);
@@ -547,8 +697,11 @@ export class World {
             eaterId: a.id,
             eaterOwnerId: a.ownerId,
             eaterName: a.name,
+            eaterFrenzy: a.frenzy,
             victimOwnerId: b.ownerId,
             victimName: b.name,
+            victimIsElder: b.isElder,
+            victimIsElite: b.isElite,
           });
         }
       }

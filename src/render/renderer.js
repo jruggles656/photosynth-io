@@ -35,6 +35,7 @@ export class Renderer {
     this.plankton = [];
     this.drawR = new Map(); // blob id → eased draw radius (logical radius lags visually)
     this.pulse = new Map(); // blob id → eat-overshoot amount
+    this.groundFx = []; // trails + kill stains, drawn beneath the blobs
     this.resize();
     window.addEventListener('resize', () => this.resize());
     this.seedPlankton();
@@ -67,6 +68,7 @@ export class Renderer {
   // Clear per-blob cosmetic state (world was reset for a new run).
   resetFx() {
     this.particles.length = 0;
+    this.groundFx.length = 0;
     this.drawR.clear();
     this.pulse.clear();
     this.zoomKick = 0;
@@ -106,12 +108,23 @@ export class Renderer {
           this.burst(e.x, e.y, e.color, count, 180, 0.9);
           this.absorb(e.x, e.y, e.color, Math.sqrt(e.mass) * 3.2, e.eaterId);
           this.bumpPulse(e.eaterId, 0.1);
+          this.stain(e.x, e.y, e.color, Math.sqrt(e.mass) * 4);
           if (e.eaterOwnerId === playerOwnerId) this.zoomKick = Math.min(0.1, this.zoomKick + 0.05);
           if (e.victimOwnerId === playerOwnerId) this.shake = 16;
           break;
         }
+        case 'thorn-fed':
+          this.burst(e.x, e.y, '#8be060', 6, 90, 0.5);
+          break;
+        case 'thorn-fire':
+          this.ring(e.x, e.y, '#6ee78c');
+          this.burst(e.x, e.y, '#3fae62', 14, 240, 0.6);
+          break;
+        case 'dawn':
+          break;
         case 'pop':
           this.burst(e.x, e.y, e.color, 22, 220, 0.8);
+          this.stain(e.x, e.y, e.color, Math.sqrt(e.mass ?? 100) * 3);
           if (e.ownerId === playerOwnerId) this.shake = 12;
           break;
         case 'powerup': {
@@ -183,6 +196,47 @@ export class Renderer {
     this.pulse.set(id, Math.min(0.2, (this.pulse.get(id) ?? 0) + amount));
   }
 
+  // A fading mark where something died — the world remembers.
+  stain(x, y, color, size) {
+    if (this.groundFx.length > 60) this.groundFx.shift();
+    this.groundFx.push({ kind: 'stain', x, y, size, color, life: 0, ttl: 4.5 });
+  }
+
+  trail(x, y, color, size) {
+    if (this.groundFx.length > 160) return;
+    this.groundFx.push({ kind: 'trail', x, y, size, color, life: 0, ttl: 0.32 });
+  }
+
+  drawGroundFx(ctx, dt) {
+    for (let i = this.groundFx.length - 1; i >= 0; i--) {
+      const g = this.groundFx[i];
+      g.life += dt;
+      if (g.life >= g.ttl) {
+        this.groundFx.splice(i, 1);
+        continue;
+      }
+      const k = g.life / g.ttl;
+      if (g.kind === 'stain') {
+        if (!this.inView(g.x, g.y, g.size)) continue;
+        const grad = ctx.createRadialGradient(g.x, g.y, 0, g.x, g.y, g.size);
+        grad.addColorStop(0, g.color);
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.globalAlpha = 0.13 * (1 - k);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y, g.size, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.globalAlpha = 0.1 * (1 - k);
+        ctx.fillStyle = g.color;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y, g.size * (1 - k * 0.4), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
   // ---- main draw ----
 
   draw(dt, opts = {}) {
@@ -232,6 +286,7 @@ export class Renderer {
     this.drawZones(ctx, t, light);
     this.drawDotGrid(ctx, viewL, viewR, viewT, viewB);
     this.drawBorder(ctx, t);
+    this.drawGroundFx(ctx, dt);
     this.drawPellets(ctx, t, viewL, viewR, viewT, viewB);
     this.drawPowerUps(ctx, t);
 
@@ -433,8 +488,10 @@ export class Renderer {
     for (const th of this.world.thorns.values()) {
       if (!this.inView(th.x, th.y, th.radius + 40)) continue;
       const spikes = 14;
-      const rot = th.seed + t * 0.08;
-      const breathe = 1 + 0.03 * Math.sin(t * 1.6 + th.seed);
+      const moving = th.vx !== 0 || th.vy !== 0;
+      const rot = th.seed + t * (moving ? 1.6 : 0.08);
+      // fed thorns visibly swell toward the next shot
+      const breathe = (1 + 0.03 * Math.sin(t * 1.6 + th.seed)) * (1 + th.fed * 0.055);
       ctx.save();
       ctx.translate(th.x, th.y);
       ctx.rotate(rot);
@@ -507,11 +564,19 @@ export class Renderer {
     // aura glow
     let glowColor = null;
     let glowSize = 0;
-    if (bloom) { glowColor = '#ff8ad8'; glowSize = 42; }
+    if (b.isElder) { glowColor = '#ffd87a'; glowSize = 55; }
+    else if (b.isElite) { glowColor = '#ff6e8a'; glowSize = 30; }
+    else if (bloom) { glowColor = '#ff8ad8'; glowSize = 42; }
     else if (wilt) { glowColor = '#9a5ab0'; glowSize = 36; }
     else if (magnet) { glowColor = '#ff7a5a'; glowSize = 26; }
     else if (inGrove) { glowColor = '#ffd87a'; glowSize = 20 + light * 14; }
     else if (photosynthesizing) { glowColor = b.color; glowSize = 8 + light * 10; }
+
+    // motion trail for anything moving fast (boosts, pounces, elites)
+    const impulse = Math.hypot(b.ix, b.iy);
+    if ((speed > 170 || impulse > 60) && Math.random() < dt * 22) {
+      this.trail(b.x, b.y, b.color, r * 0.8);
+    }
 
     // Squash & stretch along the velocity axis (area-conserving) — the
     // cheapest way a circle reads as a liquid body instead of a token.
@@ -620,6 +685,21 @@ export class Renderer {
     }
 
     ctx.restore();
+
+    // the Elder wears a slow halo of orbiting petals
+    if (b.isElder) {
+      ctx.save();
+      ctx.fillStyle = '#ffd87a';
+      ctx.globalAlpha = baseAlpha * 0.75;
+      for (let i = 0; i < 6; i++) {
+        const a = t * 0.5 + (i / 6) * Math.PI * 2;
+        const rr = r + 16 + 4 * Math.sin(t * 1.8 + i);
+        ctx.beginPath();
+        ctx.ellipse(b.x + Math.cos(a) * rr, b.y + Math.sin(a) * rr, 7, 3.5, a, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
 
     // labels — drawn unstretched, in world coords
     ctx.save();
@@ -744,6 +824,19 @@ export class Renderer {
         mctx.arc(b.x * s, b.y * s, rr, 0, Math.PI * 2);
         mctx.fill();
       }
+    }
+
+    // threats are always on the radar: the Elder gold, elites red
+    for (const b of this.world.blobs.values()) {
+      if (!b.alive || (!b.isElder && !b.isElite)) continue;
+      mctx.save();
+      mctx.shadowColor = b.isElder ? '#ffd87a' : '#ff6e8a';
+      mctx.shadowBlur = 5;
+      mctx.fillStyle = b.isElder ? '#ffd87a' : '#ff6e8a';
+      mctx.beginPath();
+      mctx.arc(b.x * s, b.y * s, b.isElder ? Math.max(3, b.radius * s) : 2.2, 0, Math.PI * 2);
+      mctx.fill();
+      mctx.restore();
     }
 
     for (const p of playerPieces) {

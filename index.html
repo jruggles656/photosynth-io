@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>photosynth.io — be still. grow. consume.</title>
+    <meta name="theme-color" content="#04100c" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Spline+Sans+Mono:wght@300..700&display=swap" rel="stylesheet" />
@@ -308,6 +314,56 @@
         font-weight: 600;
       }
 
+      /* ============ mode / overgrowth pickers ============ */
+
+      .mode-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+      .mode-btn {
+        font-family: var(--font-ui);
+        font-size: 10.5px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--dim);
+        background: rgba(4, 16, 12, 0.5);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 7px 14px;
+        cursor: pointer;
+        transition: border-color 0.2s, color 0.2s;
+      }
+      .mode-btn:hover { color: var(--text); }
+      .mode-btn.selected {
+        color: var(--chloro);
+        border-color: var(--chloro);
+        box-shadow: 0 0 12px rgba(125, 255, 176, 0.15);
+      }
+      .mode-note {
+        width: 100%;
+        font-size: 10.5px;
+        color: var(--dim);
+        letter-spacing: 0.05em;
+        margin-top: 2px;
+      }
+
+      /* ============ win screen ============ */
+
+      body[data-state='won'] #win-screen { display: flex; }
+      #win-title {
+        font-family: var(--font-display);
+        font-style: italic;
+        font-weight: 420;
+        font-size: clamp(38px, 6.5vw, 68px);
+        margin: 0;
+        color: var(--sun);
+        filter: drop-shadow(0 0 28px rgba(255, 216, 122, 0.45));
+        letter-spacing: -0.02em;
+      }
+      #win-sub {
+        margin: -16px 0 0;
+        color: var(--dim);
+        font-size: 14px;
+        letter-spacing: 0.1em;
+      }
+
       /* ============ missions ============ */
 
       .mission-list { display: flex; flex-direction: column; gap: 5px; }
@@ -584,6 +640,14 @@
           <div class="skin-row" id="skin-row"></div>
         </div>
         <div>
+          <div class="field-label">garden</div>
+          <div id="mode-row" class="mode-row"></div>
+        </div>
+        <div id="overgrowth-wrap" style="display:none">
+          <div class="field-label">overgrowth</div>
+          <div id="overgrowth-row" class="mode-row"></div>
+        </div>
+        <div>
           <div class="field-label">missions</div>
           <div id="missions-start" class="mission-list"></div>
         </div>
@@ -629,6 +693,7 @@
       <div class="hud-sub" id="pieces-sub">mass</div>
       <div class="chip-row">
         <span class="chip" id="zone-chip"></span>
+        <span class="chip" id="frenzy-chip" style="display:none; color: var(--bloom); border-color: rgba(255,138,216,0.35)"></span>
       </div>
       <div class="chip-row" id="effects"></div>
     </div>
@@ -642,6 +707,24 @@
       <b>space</b> split · <b>W</b> eject · <b>S</b> root · <b>M</b> mute
     </div>
     <button id="mute-btn" title="mute (M)">♪</button>
+
+    <!-- win screen -->
+    <div id="win-screen" class="overlay">
+      <h1 id="win-title">the garden blooms</h1>
+      <p id="win-sub">you consumed the Elder</p>
+      <div class="panel">
+        <div class="stat-grid" style="grid-template-columns: 1fr 1fr 1fr">
+          <div class="stat"><div class="num gold" id="win-time">0:00</div><div class="lbl">time</div></div>
+          <div class="stat"><div class="num gold" id="win-mass">0</div><div class="lbl">peak mass</div></div>
+          <div class="stat"><div class="num gold" id="win-kills">0</div><div class="lbl">blobs eaten</div></div>
+        </div>
+        <div id="win-note" class="best-line"></div>
+        <div class="btn-row">
+          <button class="btn-ghost" id="win-menu">menu</button>
+          <button class="btn-ghost primary" id="win-continue">keep playing</button>
+        </div>
+      </div>
+    </div>
 
     <!-- mission toast -->
     <div id="toast"></div>

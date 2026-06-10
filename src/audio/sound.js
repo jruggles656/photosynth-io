@@ -51,6 +51,30 @@ export class SoundEngine {
       osc.connect(droneGain);
       osc.start(t);
     }
+
+    // Night voice: a darker minor pad that swells as the light fades.
+    this.nightGain = this.ctx.createGain();
+    this.nightGain.gain.value = 0;
+    const nightFilter = this.ctx.createBiquadFilter();
+    nightFilter.type = 'lowpass';
+    nightFilter.frequency.value = 320;
+    this.nightGain.connect(nightFilter);
+    nightFilter.connect(this.master);
+    for (const f of [108, 128.4, 162]) {
+      const osc = this.ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = f;
+      osc.detune.value = (Math.random() - 0.5) * 8;
+      osc.connect(this.nightGain);
+      osc.start(t);
+    }
+  }
+
+  // Called as the day/night cycle moves; 0 = midnight, 1 = noon.
+  setLight(light) {
+    if (!this.ctx || !this.nightGain) return;
+    const target = Math.pow(1 - light, 2) * 0.04;
+    this.nightGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.8);
   }
 
   note(freq, { dur = 0.15, type = 'sine', vol = 0.2, glideTo = null, delay = 0 } = {}) {
@@ -105,9 +129,25 @@ export class SoundEngine {
     this.note(1108, { dur: 0.12, vol: 0.14, delay: 0.05 });
   }
 
-  kill() {
-    this.note(170, { dur: 0.28, type: 'sine', vol: 0.4, glideTo: 58 });
+  // Frenzy chains pitch the thump up — the pace of the hunt is audible.
+  kill(frenzy = 1) {
+    const mul = 1 + 0.18 * (frenzy - 1);
+    this.note(170 * mul, { dur: 0.28, type: 'sine', vol: 0.4, glideTo: 58 * mul });
     this.noise({ dur: 0.15, vol: 0.08, freq: 300 });
+  }
+
+  thornFed() {
+    this.noise({ dur: 0.1, vol: 0.12, freq: 220, q: 4 });
+  }
+
+  thornFire() {
+    this.noise({ dur: 0.35, vol: 0.25, freq: 600, q: 0.7 });
+    this.note(140, { dur: 0.3, type: 'sine', vol: 0.3, glideTo: 60 });
+  }
+
+  win() {
+    [392, 494, 587, 784].forEach((f, i) => this.note(f, { dur: 0.5, vol: 0.18, delay: i * 0.16 }));
+    [98, 123].forEach((f) => this.note(f, { dur: 1.6, type: 'triangle', vol: 0.12 }));
   }
 
   death() {

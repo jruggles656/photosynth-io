@@ -11,6 +11,8 @@ export const BOT_NAMES = [
   'Nettle', 'Bramble',
 ];
 
+export const ELITE_NAMES = ['Blight', 'Canker', 'Wither', 'Rot', 'Gall', 'Mildew'];
+
 // hunter — chases prey relentlessly, grabs power-ups, only flees at close range
 // farmer — camps sun groves and photosynthesizes, flees early
 // coward — long flight reflex, pellet diet, runs for shade when threatened
@@ -18,12 +20,14 @@ const PERSONALITIES = {
   hunter: { sight: 750, flee: 230, pelletSight: 550 },
   farmer: { sight: 550, flee: 380, pelletSight: 300 },
   coward: { sight: 650, flee: 460, pelletSight: 650 },
+  elite: { sight: 850, flee: 200, pelletSight: 600 },
+  elder: { sight: 400, flee: 0, pelletSight: 0 },
 };
 
-export function randomBotIdentity() {
-  const roll = Math.random();
+export function randomBotIdentity(rand = Math.random) {
+  const roll = rand();
   const personality = roll < 0.35 ? 'hunter' : roll < 0.7 ? 'coward' : 'farmer';
-  return { name: BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)], personality };
+  return { name: BOT_NAMES[Math.floor(rand() * BOT_NAMES.length)], personality };
 }
 
 export function decideBotMove(bot, world) {
@@ -36,6 +40,21 @@ export function decideBotMove(bot, world) {
   const P = PERSONALITIES[bot.personality] ?? PERSONALITIES.coward;
   // Hunters see further in the dark — nights are dangerous.
   const sight = bot.personality === 'hunter' && world.lightLevel < 0.35 ? P.sight * 1.3 : P.sight;
+
+  // The Elder never hunts and never flees — it drifts between groves,
+  // consuming whatever drifts into its path. A landmark, not a chaser.
+  if (bot.personality === 'elder') {
+    const groves = world.zones.filter((z) => z.type === 'grove');
+    if (groves.length) {
+      if (bot.groveIdx === undefined) bot.groveIdx = 0;
+      const grove = groves[bot.groveIdx % groves.length];
+      if (Math.hypot(grove.x - bot.x, grove.y - bot.y) < 120) bot.groveIdx++;
+      bot.targetX = grove.x;
+      bot.targetY = grove.y;
+    }
+    avoidThorns(bot, world);
+    return;
+  }
 
   let nearestThreat = null;
   let threatDist2 = Infinity;
@@ -91,6 +110,32 @@ export function decideBotMove(bot, world) {
     bot.targetY = clamp(bot.y + (dy / len) * 500, 50, world.height - 50);
     avoidThorns(bot, world);
     return;
+  }
+
+  // STALK — elites hunt the player specifically, ignoring easier meals.
+  if (bot.personality === 'elite') {
+    let target = null;
+    let d2best = Infinity;
+    for (const o of world.blobs.values()) {
+      if (!o.alive || !o.isPlayer) continue;
+      const d2 = (o.x - bot.x) ** 2 + (o.y - bot.y) ** 2;
+      if (d2 > P.sight * P.sight * 2.25) continue; // they smell the player from far off
+      if (d2 > 150 * 150 && world.zoneAt(o.x, o.y)?.type === 'shade') continue;
+      if (bot.mass < o.mass * EAT_RATIO) continue;
+      if (d2 < d2best) {
+        target = o;
+        d2best = d2;
+      }
+    }
+    if (target) {
+      bot.targetX = target.x;
+      bot.targetY = target.y;
+      if (bot.mass > target.mass * 2.8 && bot.mass >= 64 && d2best < 340 * 340 && Math.random() < 0.4) {
+        bot.wantsSplit = true;
+      }
+      avoidThorns(bot, world);
+      return;
+    }
   }
 
   // FARM — farmers head for a sun grove and sit still in it.

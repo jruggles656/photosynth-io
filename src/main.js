@@ -4,7 +4,7 @@
 import { World } from './game/world.js';
 import { BLOB_COLORS } from './game/entities.js';
 import { Renderer } from './render/renderer.js';
-import { SKINS, drawSkinPattern } from './render/skins.js';
+import { SKINS, drawSkinPattern, skinUnlocked } from './render/skins.js';
 import { Input } from './input/input.js';
 import { LocalTransport } from './net/local.js';
 import { SoundEngine } from './audio/sound.js';
@@ -34,6 +34,7 @@ const MISSION_POOL = [
   { id: 'apex', tier: 'long', text: 'become #1 in the garden', stat: 'apex', target: 1, perRun: true },
   { id: 'mass500', tier: 'long', text: 'reach 500 mass', stat: 'peakMass', target: 500, perRun: true },
   { id: 'kills15', tier: 'long', text: 'consume 15 blobs (lifetime)', stat: 'kills', target: 15 },
+  { id: 'elder', tier: 'long', text: 'consume the Elder', stat: 'elderEaten', target: 1, perRun: true },
 ];
 const MISSION_BY_ID = Object.fromEntries(MISSION_POOL.map((m) => [m.id, m]));
 
@@ -43,6 +44,22 @@ const PROFILE_KEY = 'photosynth.profile.v1';
 const BEST_KEY = 'photosynth.best.v1';
 const MISSIONS_KEY = 'photosynth.missions.v1';
 const STARS_KEY = 'photosynth.stars.v1';
+const DAILY_KEY = 'photosynth.daily.v1';
+const LEGACY_KEY = 'photosynth.legacy.v1';
+
+// Deterministic seed from today's date for daily-garden mode.
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function hashSeed(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
 
 function loadJson(key, fallback) {
   try {
@@ -52,13 +69,18 @@ function loadJson(key, fallback) {
   }
 }
 
-const profile = loadJson(PROFILE_KEY, { name: '', color: BLOB_COLORS[0], skin: 'plain', muted: false });
-let bests = loadJson(BEST_KEY, { peakMass: 0, longestSec: 0, kills: 0, games: 0 });
+const profile = loadJson(PROFILE_KEY, {
+  name: '', color: BLOB_COLORS[0], skin: 'plain', muted: false, mode: 'free', overgrowth: 0,
+});
+let bests = loadJson(BEST_KEY, { peakMass: 0, longestSec: 0, kills: 0, games: 0, wins: 0, crownKill: false, elderWin: false });
 let stars = Number(localStorage.getItem(STARS_KEY) || 0);
+let daily = loadJson(DAILY_KEY, { date: '', best: 0, attempts: 0 });
+if (daily.date !== todayStr()) daily = { date: todayStr(), best: 0, attempts: 0 };
 
 const saveProfile = () => localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
 const saveBests = () => localStorage.setItem(BEST_KEY, JSON.stringify(bests));
 const saveStars = () => localStorage.setItem(STARS_KEY, String(stars));
+const saveDaily = () => localStorage.setItem(DAILY_KEY, JSON.stringify(daily));
 
 function pickMission(tier, excludeIds) {
   const candidates = MISSION_POOL.filter((m) => m.tier === tier && !excludeIds.includes(m.id));
@@ -113,6 +135,7 @@ let shimmerTimer = 0;
 let hitStop = 0; // seconds of near-freeze remaining (kill impact)
 let pelletCombo = 0;
 let lastPelletAt = 0;
+let lightSoundTimer = 0;
 const massHistory = []; // [t, mass] ring for the rate readout
 
 // ---- mission helpers ----
@@ -190,7 +213,7 @@ function buildSkinRow() {
   const row = $('skin-row');
   row.innerHTML = '';
   for (const skin of SKINS) {
-    const unlocked = bests.peakMass >= skin.unlock;
+    const unlocked = skinUnlocked(skin, bests);
     const btn = document.createElement('button');
     btn.className = 'skin-btn' + (skin.id === profile.skin ? ' selected' : '') + (unlocked ? '' : ' locked');
     const thumb = document.createElement('canvas');
@@ -225,7 +248,7 @@ function buildSkinRow() {
     if (!unlocked) {
       const lock = document.createElement('span');
       lock.className = 'lock';
-      lock.textContent = `🔒 ${skin.unlock}`;
+      lock.textContent = skin.flag ? `🔒 ${skin.hint}` : `🔒 ${skin.unlock}`;
       btn.appendChild(lock);
     } else {
       btn.addEventListener('click', () => {
@@ -234,6 +257,53 @@ function buildSkinRow() {
         buildSkinRow();
       });
     }
+    row.appendChild(btn);
+  }
+}
+
+// Mode (free play vs daily garden) and overgrowth (post-win difficulty) pickers.
+function buildModeRow() {
+  const row = $('mode-row');
+  row.innerHTML = '';
+  for (const [mode, label] of [['free', 'free play'], ['daily', 'daily garden']]) {
+    const btn = document.createElement('button');
+    btn.className = 'mode-btn' + (profile.mode === mode ? ' selected' : '');
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      profile.mode = mode;
+      saveProfile();
+      buildModeRow();
+    });
+    row.appendChild(btn);
+  }
+  const note = document.createElement('div');
+  note.className = 'mode-note';
+  note.textContent = profile.mode === 'daily'
+    ? `today's garden · best ${Math.round(daily.best)} · ${daily.attempts} ${daily.attempts === 1 ? 'attempt' : 'attempts'}`
+    : '';
+  row.appendChild(note);
+}
+
+function buildOvergrowthRow() {
+  const wrap = $('overgrowth-wrap');
+  const unlocked = Math.min(3, bests.wins || 0);
+  if (unlocked === 0) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'block';
+  const row = $('overgrowth-row');
+  row.innerHTML = '';
+  profile.overgrowth = Math.min(profile.overgrowth ?? 0, unlocked);
+  for (let lvl = 0; lvl <= unlocked; lvl++) {
+    const btn = document.createElement('button');
+    btn.className = 'mode-btn' + (profile.overgrowth === lvl ? ' selected' : '');
+    btn.textContent = lvl === 0 ? 'calm' : `overgrowth ${'I'.repeat(lvl)}`;
+    btn.addEventListener('click', () => {
+      profile.overgrowth = lvl;
+      saveProfile();
+      buildOvergrowthRow();
+    });
     row.appendChild(btn);
   }
 }
@@ -249,6 +319,8 @@ function refreshBestLine() {
 $('name-input').value = profile.name;
 buildColorRow();
 buildSkinRow();
+buildModeRow();
+buildOvergrowthRow();
 refreshBestLine();
 renderMissionList($('missions-start'));
 
@@ -261,10 +333,34 @@ function startGame() {
   sound.setMuted(profile.muted);
 
   // Fresh run, fresh garden — otherwise survivors from past runs tower over a new spawn.
-  world.reset();
+  const isDaily = profile.mode === 'daily';
+  const og = isDaily ? 0 : (profile.overgrowth ?? 0);
+  world.reset({
+    seed: isDaily ? hashSeed(todayStr()) : null,
+    modifiers: {
+      decayMul: 1 + 0.2 * og,
+      thorns: 9 + 3 * og,
+      elites: 2 + og,
+      elderMass: 450 + 100 * og,
+    },
+  });
   renderer.resetFx();
   const playerBlob = world.spawnPlayer({ name: profile.name, ownerId: PLAYER_OWNER_ID, color: profile.color, skin: profile.skin });
   renderer.setView({ x: playerBlob.x, y: playerBlob.y, mass: playerBlob.mass }, 0, true);
+
+  if (isDaily) {
+    daily.attempts++;
+    saveDaily();
+  }
+
+  // Legacy payout: your last bloom fertilizes this one — gold pellets near spawn.
+  const legacy = loadJson(LEGACY_KEY, { gold: 0 });
+  if (legacy.gold > 0) {
+    world.seedLegacyGold(playerBlob.x, playerBlob.y, legacy.gold);
+    toast(`✦ your last bloom seeded ${legacy.gold} gold pellets`);
+    localStorage.setItem(LEGACY_KEY, JSON.stringify({ gold: 0 }));
+  }
+
   run = {
     startedAt: performance.now(),
     startDay: world.day,
@@ -277,8 +373,10 @@ function startGame() {
     nights: 0,
     days: 0,
     apex: 0,
+    elderEaten: 0,
     nightSeen: false,
     lastSplitAt: 0,
+    won: false,
   };
   lastEaterName = null;
   massHistory.length = 0;
@@ -288,6 +386,35 @@ function startGame() {
   hitStop = 0;
   $('effects').innerHTML = '';
   setState('playing');
+}
+
+// You ate the last piece of the Elder. The garden blooms.
+function winGame() {
+  run.elderEaten = 1;
+  run.won = true;
+  checkMissions(); // 'consume the Elder' completes here
+  bests.wins = (bests.wins || 0) + 1;
+  if (!bests.elderWin) {
+    bests.elderWin = true;
+    toast('✦ verdant membrane unlocked');
+  }
+  saveBests();
+  const survived = (performance.now() - run.startedAt) / 1000;
+  const mins = Math.floor(survived / 60);
+  const secs = Math.floor(survived % 60).toString().padStart(2, '0');
+  $('win-time').textContent = `${mins}:${secs}`;
+  $('win-mass').textContent = Math.round(run.peakMass);
+  $('win-kills').textContent = run.kills;
+  const unlockedOg = Math.min(3, bests.wins);
+  $('win-note').textContent = unlockedOg > (profile.overgrowth ?? 0)
+    ? `overgrowth ${'I'.repeat(unlockedOg)} unlocked — a harsher garden awaits`
+    : 'the garden is yours';
+  sound.win();
+  const pieces = world.getOwnedBlobs(PLAYER_OWNER_ID);
+  if (pieces[0]) renderer.burst(pieces[0].x, pieces[0].y, '#ffd87a', 40, 260, 1.4);
+  setState('won');
+  buildSkinRow();
+  buildOvergrowthRow();
 }
 
 function endGame() {
@@ -336,11 +463,20 @@ function endGame() {
     unlockNote.style.display = 'none';
   }
 
+  // daily-garden record + the legacy gold your corpse seeds into the next run
+  if (profile.mode === 'daily' && run.peakMass > daily.best) {
+    daily.best = run.peakMass;
+    saveDaily();
+  }
+  const legacyGold = Math.min(8, Math.floor(run.peakMass / 60));
+  if (legacyGold > 0) localStorage.setItem(LEGACY_KEY, JSON.stringify({ gold: legacyGold }));
+
   sound.death();
   setState('dead');
   run = null;
   refreshBestLine();
   buildSkinRow();
+  buildModeRow();
   renderMissionList($('missions-start'));
 }
 
@@ -350,6 +486,8 @@ $('name-input').addEventListener('keydown', (e) => {
 });
 $('respawn-btn').addEventListener('click', startGame);
 $('menu-btn').addEventListener('click', () => setState('menu'));
+$('win-continue').addEventListener('click', () => setState('playing'));
+$('win-menu').addEventListener('click', () => setState('menu'));
 
 const muteBtn = $('mute-btn');
 function applyMute() {
@@ -395,12 +533,38 @@ function handleEvents(events) {
           run.kills++;
           if (performance.now() - run.lastSplitAt < 1200) run.pounceKills++;
           hitStop = Math.min(0.12, 0.04 + e.mass / 2500);
-          sound.kill();
+          sound.kill(e.eaterFrenzy ?? 1);
+          // feat: eat the reigning #1
+          if (!bests.crownKill && e.victimOwnerId === apexOwnerId && apexOwnerId !== PLAYER_OWNER_ID) {
+            bests.crownKill = true;
+            saveBests();
+            toast('✦ crown membrane unlocked — you ate the #1');
+          }
+          // the win: the last piece of the Elder, consumed by you
+          if (e.victimIsElder) {
+            const elderRemains = [...world.blobs.values()].some((b) => b.alive && b.isElder);
+            if (!elderRemains) winGame();
+          }
         }
         if (e.victimOwnerId === PLAYER_OWNER_ID) {
           lastEaterName = e.eaterName || null;
           sound.kill();
         }
+        break;
+      case 'dawn': {
+        const msg = e.day === 2
+          ? 'dawn · day 2 — elite hunters stir'
+          : e.day === 3
+            ? 'dawn · day 3 — the Elder has bloomed'
+            : `dawn · day ${e.day} — the garden grows restless`;
+        toast(msg);
+        break;
+      }
+      case 'thorn-fed':
+        sound.thornFed();
+        break;
+      case 'thorn-fire':
+        sound.thornFire();
         break;
       case 'powerup':
         if (e.ownerId === PLAYER_OWNER_ID) {
@@ -456,6 +620,17 @@ function updateHud(pieces, totalMass, now) {
 
   $('pieces-sub').textContent = pieces.length > 1 ? `mass · ${pieces.length} pieces` : 'mass';
 
+  // frenzy chip — kill chains multiply your take
+  const nowMs2 = Date.now();
+  const frenzy = pieces.reduce((acc, p) => (nowMs2 - p.lastKillAt < 6000 && p.frenzy > acc ? p.frenzy : acc), 1);
+  const fchip = $('frenzy-chip');
+  if (frenzy > 1) {
+    fchip.textContent = `🔥 frenzy ×${(1 + 0.25 * (frenzy - 1)).toFixed(2)}`;
+    fchip.style.display = 'inline-block';
+  } else {
+    fchip.style.display = 'none';
+  }
+
   // zone chip
   const zone = world.zoneAt(renderer.camera.x, renderer.camera.y);
   const zoneChip = $('zone-chip');
@@ -501,15 +676,18 @@ function updateEffectChips(blob, nowMs) {
     .join('');
 }
 
+let apexOwnerId = null;
+
 function updateLeaderboard() {
   const byOwner = new Map();
   for (const b of world.blobs.values()) {
     if (!b.alive || b.ownerId === null) continue;
-    const entry = byOwner.get(b.ownerId) ?? { name: b.name, mass: 0, mine: b.ownerId === PLAYER_OWNER_ID };
+    const entry = byOwner.get(b.ownerId) ?? { name: b.name, mass: 0, mine: b.ownerId === PLAYER_OWNER_ID, ownerId: b.ownerId };
     entry.mass += b.mass;
     byOwner.set(b.ownerId, entry);
   }
   const entries = [...byOwner.values()].sort((a, b) => b.mass - a.mass).slice(0, 8);
+  apexOwnerId = entries[0]?.ownerId ?? null;
   if (run && entries[0]?.mine) run.apex = 1;
   $('leaders').innerHTML = entries
     .map((e, i) => `<li class="${e.mine ? 'you' : ''}"><span><span class="rank">${i + 1}</span>${escapeHtml(e.name)}</span><span>${Math.round(e.mass)}</span></li>`)
@@ -532,6 +710,13 @@ function frame(now) {
   if (hitStop > 0) {
     hitStop -= rawDt;
     dt = rawDt * 0.08;
+  }
+
+  // night pad follows the light level (throttled)
+  lightSoundTimer += rawDt;
+  if (lightSoundTimer > 0.5) {
+    lightSoundTimer = 0;
+    sound.setLight(world.lightLevel);
   }
 
   if (state === 'playing') {
