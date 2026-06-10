@@ -38,6 +38,11 @@ Bloom and Wilt make the photosynthesis layer interactive instead of passive.
 - **Farmers** camp sun groves and photosynthesize, fleeing early.
 - **Cowards** live on pellets and bolt for shade when threatened.
 
+Bots have reaction time, and a rooted blob reads as flora — nothing flees
+from a plant until it's close enough to touch. The hunting loop: root near
+food, grow while you wait, then pounce. Splitting launches the new piece
+toward your cursor, so a well-timed split is how you actually catch things.
+
 Rare gold pellets are worth 3x. Eject mass to bait, feed, or shed weight before a thorn.
 
 ## Controls

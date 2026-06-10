@@ -17,7 +17,7 @@ export const BOT_NAMES = [
 const PERSONALITIES = {
   hunter: { sight: 750, flee: 230, pelletSight: 550 },
   farmer: { sight: 550, flee: 380, pelletSight: 300 },
-  coward: { sight: 650, flee: 560, pelletSight: 650 },
+  coward: { sight: 650, flee: 460, pelletSight: 650 },
 };
 
 export function randomBotIdentity() {
@@ -27,6 +27,12 @@ export function randomBotIdentity() {
 }
 
 export function decideBotMove(bot, world) {
+  // Reaction time: bots commit to a decision for 180-400ms. Lunges and
+  // jukes can land inside that window — instant per-frame reactions can't be beaten.
+  if (bot.nextThink === undefined) bot.nextThink = 0;
+  if (world.time < bot.nextThink) return;
+  bot.nextThink = world.time + 0.18 + Math.random() * 0.22;
+
   const P = PERSONALITIES[bot.personality] ?? PERSONALITIES.coward;
 
   let nearestThreat = null;
@@ -47,6 +53,11 @@ export function decideBotMove(bot, world) {
     }
 
     if (other.mass >= bot.mass * EAT_RATIO) {
+      // A rooted blob reads as flora — bots only fear it at point-blank range.
+      // This is what makes ambush hunting (root, wait, pounce) work.
+      const rooted = Math.hypot(other.vx, other.vy) < 1;
+      const pointBlank = (other.radius + bot.radius + 40) ** 2;
+      if (rooted && d2 > pointBlank) continue;
       if (d2 < threatDist2) {
         nearestThreat = other;
         threatDist2 = d2;

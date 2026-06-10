@@ -44,7 +44,7 @@ const $ = (id) => document.getElementById(id);
 const canvas = $('game');
 
 const world = new World({ width: 4000, height: 4000 });
-world.seedPellets(400);
+world.seedPellets(500);
 for (let i = 0; i < 20; i++) world.spawnBot();
 
 const transport = new LocalTransport(world);

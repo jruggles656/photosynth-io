@@ -16,6 +16,8 @@ export class Blob {
     this.y = y;
     this.vx = 0;
     this.vy = 0;
+    this.ix = 0; // launch impulse (split pounce, thorn scatter); decays in moveBlob
+    this.iy = 0;
     this.mass = mass;
     this.name = name;
     this.isPlayer = isPlayer;
@@ -40,16 +42,16 @@ export class Blob {
 }
 
 export class Pellet {
-  constructor({ x, y, mass = 1, tint = null, color = null }) {
+  constructor({ x, y, mass = 2, tint = null, color = null }) {
     this.id = newId();
     this.x = x;
     this.y = y;
     this.mass = mass;
     this.vx = 0;
     this.vy = 0;
-    // tint 0-2 = ambient greens/teals, 3 = rare gold (worth more). Ejected mass carries its owner's color.
+    // tint 0-2 = ambient greens/teals, 3 = rare gold (worth 3x). Ejected mass carries its owner's color.
     this.tint = tint ?? (Math.random() < 0.05 ? 3 : Math.floor(Math.random() * 3));
-    if (this.tint === 3 && mass === 1) this.mass = 3;
+    if (this.tint === 3 && mass === 2) this.mass = 6;
     this.color = color;
   }
 

@@ -8,7 +8,10 @@ import {
 } from './rules.js';
 import { decideBotMove, randomBotIdentity } from '../ai/bot.js';
 
-const BASE_SPEED = 220; // px/sec for a tiny blob; scales down with size
+const BASE_SPEED = 240; // px/sec for a tiny blob; scales down with size
+const SPEED_EXP = 0.38; // flatter than sqrt so predators can actually close gaps
+const SPLIT_LAUNCH = 750; // impulse on split pieces — the pounce
+const POP_SCATTER = 420; // impulse on thorn-pop pieces
 const SPLIT_COOLDOWN_MS = 8000;
 const POWERUP_DURATION_MS = 8000;
 const POWERUP_SPAWN_INTERVAL_MS = 6000;
@@ -253,6 +256,8 @@ export class World {
       });
       piece.targetX = thorn.x + Math.cos(angle) * (dist + 300);
       piece.targetY = thorn.y + Math.sin(angle) * (dist + 300);
+      piece.ix = Math.cos(angle) * POP_SCATTER;
+      piece.iy = Math.sin(angle) * POP_SCATTER;
       piece.splitCooldown = now + SPLIT_COOLDOWN_MS;
       piece.thornImmune = now + 1500;
       this.blobs.set(piece.id, piece);
@@ -357,6 +362,8 @@ export class World {
         });
         piece.targetX = b.targetX;
         piece.targetY = b.targetY;
+        piece.ix = (dx / len) * SPLIT_LAUNCH; // pounce toward the cursor
+        piece.iy = (dy / len) * SPLIT_LAUNCH;
         piece.splitCooldown = now + SPLIT_COOLDOWN_MS;
         b.splitCooldown = now + SPLIT_COOLDOWN_MS;
         this.blobs.set(piece.id, piece);
@@ -395,18 +402,27 @@ export class World {
     const dist = Math.hypot(dx, dy);
     // Stop radius scales with size so parking the cursor on yourself means "be still and grow".
     const stopRadius = Math.max(8, blob.radius * 0.4);
-    if (dist < stopRadius) {
-      blob.vx = 0;
-      blob.vy = 0;
-      return;
+    let mvx = 0;
+    let mvy = 0;
+    if (dist >= stopRadius) {
+      const speed = BASE_SPEED / Math.pow(blob.mass / 10, SPEED_EXP);
+      const speedMul = blob.effects.speed && blob.effects.speed > Date.now() ? 1.5 : 1;
+      const v = Math.min(dist / dt, speed * speedMul);
+      mvx = (dx / dist) * v;
+      mvy = (dy / dist) * v;
     }
-    const speed = BASE_SPEED / Math.sqrt(blob.mass / 10);
-    const speedMul = blob.effects.speed && blob.effects.speed > Date.now() ? 1.5 : 1;
-    const step = Math.min(dist, speed * speedMul * dt);
-    blob.vx = (dx / dist) * speed * speedMul;
-    blob.vy = (dy / dist) * speed * speedMul;
-    blob.x += (dx / dist) * step;
-    blob.y += (dy / dist) * step;
+    // Launch impulse decays independently of steering — lets split pieces lunge.
+    const decay = Math.exp(-2.8 * dt);
+    blob.ix *= decay;
+    blob.iy *= decay;
+    if (Math.abs(blob.ix) < 5 && Math.abs(blob.iy) < 5) {
+      blob.ix = 0;
+      blob.iy = 0;
+    }
+    blob.vx = mvx + blob.ix;
+    blob.vy = mvy + blob.iy;
+    blob.x += blob.vx * dt;
+    blob.y += blob.vy * dt;
     blob.x = Math.max(blob.radius, Math.min(this.width - blob.radius, blob.x));
     blob.y = Math.max(blob.radius, Math.min(this.height - blob.radius, blob.y));
   }
@@ -416,7 +432,7 @@ export class World {
     for (const blob of this.blobs.values()) {
       if (!blob.alive) continue;
       for (const [pid, pellet] of this.pellets) {
-        if (overlaps(blob, pellet, 0.9)) {
+        if (overlaps(blob, pellet, 1.0)) {
           blob.mass += pellet.mass;
           this.pellets.delete(pid);
           this.pushEvent({
@@ -440,7 +456,7 @@ export class World {
         const b = blobs[j];
         if (!a.alive || !b.alive) continue;
         if (a.ownerId !== null && a.ownerId === b.ownerId) continue;
-        if (canEat(a, b) && overlaps(a, b, 0.6)) {
+        if (canEat(a, b) && overlaps(a, b, 0.7)) {
           // Shield blocks one fatal hit, then pops.
           if (b.effects.shield && b.effects.shield > now) {
             delete b.effects.shield;
@@ -504,7 +520,7 @@ export class World {
     }
   }
 
-  refillPellets(target = 400) {
+  refillPellets(target = 500) {
     while (this.pellets.size < target) {
       const p = new Pellet({
         x: Math.random() * this.width,
