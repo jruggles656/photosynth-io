@@ -3,13 +3,15 @@
 
 import { Blob, Pellet, PowerUp, Thorn, POWERUP_TYPES } from './entities.js';
 import {
-  applyPhotosynthesis, canEat, overlaps, MIN_MASS,
+  applyPhotosynthesis, canEat, overlaps, MIN_MASS, CORPSE_SCATTER_MASS,
   THORN_POP_MASS, EJECT_MIN_MASS, EJECT_COST, EJECT_PELLET_MASS, EJECT_SPEED,
 } from './rules.js';
 import { decideBotMove, randomBotIdentity } from '../ai/bot.js';
 
-const BASE_SPEED = 240; // px/sec for a tiny blob; scales down with size
-const SPEED_EXP = 0.38; // flatter than sqrt so predators can actually close gaps
+// Speed: agar.io's curve — maxSpeed ∝ radius^-0.449 (≈ mass^-0.22). Doubling
+// mass costs ~14% speed, so growing feels gradual instead of crippling.
+const SPEED_K = 660; // maxSpeed = SPEED_K / radius^0.449 → ~180 px/s at mass 20
+const SPEED_RADIUS_EXP = 0.449;
 const SPLIT_LAUNCH = 750; // impulse on split pieces — the pounce
 const POP_SCATTER = 420; // impulse on thorn-pop pieces
 const SPLIT_COOLDOWN_MS = 8000;
@@ -69,6 +71,30 @@ export class World {
       } while (Math.hypot(x - this.width / 2, y - this.height / 2) < 450);
       const t = new Thorn({ x, y });
       this.thorns.set(t.id, t);
+    }
+  }
+
+  // Day number, starting at 1. One full cycle = DAY_LENGTH_SEC.
+  get day() {
+    return Math.floor(this.time / DAY_LENGTH_SEC) + 1;
+  }
+
+  // Scatter pellets where a big blob died — the comeback fund.
+  scatterCorpse(blob) {
+    const scatterMass = blob.mass * 0.2;
+    const count = Math.min(10, Math.max(3, Math.floor(scatterMass / 4)));
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const p = new Pellet({
+        x: Math.max(4, Math.min(this.width - 4, blob.x)),
+        y: Math.max(4, Math.min(this.height - 4, blob.y)),
+        mass: scatterMass / count,
+        tint: 0,
+        color: blob.color,
+      });
+      p.vx = Math.cos(angle) * (120 + Math.random() * 220);
+      p.vy = Math.sin(angle) * (120 + Math.random() * 220);
+      this.pellets.set(p.id, p);
     }
   }
 
@@ -175,6 +201,14 @@ export class World {
     // Bot brains decide targets first
     for (const blob of this.blobs.values()) {
       if (blob.isBot && blob.alive) decideBotMove(blob, this);
+    }
+    // Bots split-pounce too (deferred so the blobs map isn't mutated mid-decide)
+    for (const blob of [...this.blobs.values()]) {
+      if (!blob.wantsSplit) continue;
+      blob.wantsSplit = false;
+      if (this.getOwnedBlobs(blob.ownerId).length < 3) {
+        this.executeCommand(blob.ownerId, { type: 'split' });
+      }
     }
 
     for (const blob of this.blobs.values()) {
@@ -400,17 +434,28 @@ export class World {
     const dx = blob.targetX - blob.x;
     const dy = blob.targetY - blob.y;
     const dist = Math.hypot(dx, dy);
-    // Stop radius scales with size so parking the cursor on yourself means "be still and grow".
-    const stopRadius = Math.max(8, blob.radius * 0.4);
-    let mvx = 0;
-    let mvy = 0;
-    if (dist >= stopRadius) {
-      const speed = BASE_SPEED / Math.pow(blob.mass / 10, SPEED_EXP);
-      const speedMul = blob.effects.speed && blob.effects.speed > Date.now() ? 1.5 : 1;
-      const v = Math.min(dist / dt, speed * speedMul);
-      mvx = (dx / dist) * v;
-      mvy = (dy / dist) * v;
+
+    // Cursor distance is the throttle (agar.io's "liquid" feel): full speed
+    // outside the band, easing continuously to zero at the cursor. There is
+    // no discrete stopped state — parking the cursor on yourself IS the stop.
+    const band = Math.max(40, blob.radius * 1.4);
+    const throttle = Math.min(1, dist / band);
+    const speedMul = blob.effects.speed && blob.effects.speed > Date.now() ? 1.5 : 1;
+    const maxSpeed = (SPEED_K / Math.pow(blob.radius, SPEED_RADIUS_EXP)) * speedMul;
+    const desiredSpeed = maxSpeed * throttle;
+    const desiredVx = dist > 0.5 ? (dx / dist) * desiredSpeed : 0;
+    const desiredVy = dist > 0.5 ? (dy / dist) * desiredSpeed : 0;
+
+    // Velocity smoothing: big blobs take longer to redirect — reads as weight.
+    const tau = 0.07 + 0.06 * Math.min(1, blob.radius / 80);
+    const k = 1 - Math.exp(-dt / tau);
+    blob.mvx += (desiredVx - blob.mvx) * k;
+    blob.mvy += (desiredVy - blob.mvy) * k;
+    if (throttle === 0 || (Math.abs(blob.mvx) < 0.8 && Math.abs(blob.mvy) < 0.8)) {
+      if (Math.abs(blob.mvx) < 0.8) blob.mvx = 0;
+      if (Math.abs(blob.mvy) < 0.8) blob.mvy = 0;
     }
+
     // Launch impulse decays independently of steering — lets split pieces lunge.
     const decay = Math.exp(-2.8 * dt);
     blob.ix *= decay;
@@ -419,8 +464,8 @@ export class World {
       blob.ix = 0;
       blob.iy = 0;
     }
-    blob.vx = mvx + blob.ix;
-    blob.vy = mvy + blob.iy;
+    blob.vx = blob.mvx + blob.ix;
+    blob.vy = blob.mvy + blob.iy;
     blob.x += blob.vx * dt;
     blob.y += blob.vy * dt;
     blob.x = Math.max(blob.radius, Math.min(this.width - blob.radius, blob.x));
@@ -442,6 +487,7 @@ export class World {
             tint: pellet.tint,
             color: pellet.color,
             mass: pellet.mass,
+            eaterId: blob.id,
             ownerId: blob.ownerId,
           });
         }
@@ -463,7 +509,14 @@ export class World {
             this.pushEvent({ type: 'shield-pop', x: b.x, y: b.y, ownerId: b.ownerId });
             continue;
           }
-          a.mass += b.mass;
+          // Corpse economy: big victims scatter 20% of their mass as pellets —
+          // a comeback fund that pulls scavengers (and drama) to the kill site.
+          let gained = b.mass;
+          if (b.mass > CORPSE_SCATTER_MASS) {
+            gained = b.mass * 0.8;
+            this.scatterCorpse(b);
+          }
+          a.mass += gained;
           b.alive = false;
           this.blobs.delete(b.id);
           this.pushEvent({
@@ -472,6 +525,7 @@ export class World {
             y: b.y,
             color: b.color,
             mass: b.mass,
+            eaterId: a.id,
             eaterOwnerId: a.ownerId,
             eaterName: a.name,
             victimOwnerId: b.ownerId,

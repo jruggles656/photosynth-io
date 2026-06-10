@@ -6,6 +6,8 @@ A browser-based agar.io-style game set in a bioluminescent abyssal garden. Be st
 
 **Photosynthesis economy.** Standing still slowly grows you. Moving burns mass. Small blobs can hide and grow; big blobs have to keep hunting or shrink. Every moment is a trade between safety and growth.
 
+**The leader is on a treadmill.** Everything decays at 0.2% of its mass per second (the agar.io rate) and the movement tax is proportional too — tiny blobs barely feel it, but photosynthesis alone caps out around 500–800 mass. Past that you hunt or you shrink. Big victims scatter 20% of their mass as pellets when eaten, pulling scavengers into feeding frenzies at every kill site.
+
 The economy is shaped by three more layers:
 
 - **Day/night cycle** — a ~3-minute cosine clock scales photosynthesis from ×0.4 (midnight) to ×1.6 (noon). Farm at noon, hunt in the dark.
@@ -47,6 +49,8 @@ Rare gold pellets are worth 3x. Eject mass to bait, feed, or shed weight before 
 
 ## Controls
 
+Movement is liquid, agar.io-style: cursor distance is the throttle. Far cursor = full speed, near cursor = creep, cursor on yourself = ease to a stop and photosynthesize. Blobs have inertia — big ones turn slowly.
+
 - **Mouse** — swim toward cursor (park the cursor on yourself to root)
 - **Spacebar** — split
 - **W / right-click** — eject mass
@@ -56,6 +60,7 @@ Rare gold pellets are worth 3x. Eject mass to bait, feed, or shed weight before 
 
 ## Meta
 
+- **Missions** — three active at a time (short/medium/long), Jetpack Joyride-style: "survive a full night", "pounce-kill 2 blobs", "become #1". Completing one earns a star and slots in a new mission; near-misses show on the death screen.
 - **Skins** — five membrane patterns unlock at personal-best mass milestones (80/150/250/400)
 - **Personal bests** — peak mass, longest life, and lives are stored locally
 - **Death report** — survival time, peak mass, kills, pellets, and who ate you

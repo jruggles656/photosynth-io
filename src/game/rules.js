@@ -2,9 +2,12 @@
 // Easy to unit-test, easy to reuse on a server.
 
 export const PHOTO_GAIN_PER_SEC = 1.0;      // base mass/sec when stationary
-export const MOVE_COST_PER_SEC = 0.2;       // mass/sec when moving
+export const DECAY_RATE = 0.002;            // 0.2%/s of mass, always — the leader treadmill
+export const MOVE_TAX_RATE = 0.002;         // additional 0.2%/s of mass while moving
+export const MOVE_COST_MIN = 0.2;           // movement is never free, even when tiny
 export const MIN_MASS = 10;                 // floor — can't shrink below this
 export const EAT_RATIO = 1.25;              // must be 25% bigger to eat
+export const CORPSE_SCATTER_MASS = 80;      // victims above this scatter 20% of their mass as pellets
 
 export const THORN_POP_MASS = 110;          // blobs above this burst on thorn contact
 export const EJECT_MIN_MASS = 30;           // can't eject below this
@@ -28,22 +31,27 @@ export function overlaps(a, b, factor = 1) {
   return dx * dx + dy * dy < r * r;
 }
 
-// Apply photosynthesis / movement tax to a blob over `dt` seconds.
+// Apply photosynthesis / decay / movement tax to a blob over `dt` seconds.
 // mods.zoneMul — terrain multiplier (sun grove ×2, shade ×0)
 // mods.lightMul — day/night multiplier (computed by World from its clock)
+//
+// The economy's shape: proportional decay means photosynthesis alone has a
+// natural ceiling (~mass 500-800 at noon) — past that, you must hunt or shrink.
+// Small blobs barely feel decay; the leader is on a treadmill.
 export function applyPhotosynthesis(blob, dt, now = Date.now(), mods = {}) {
   const { zoneMul = 1, lightMul = 1 } = mods;
   const moving = Math.hypot(blob.vx, blob.vy) > 1;
   const bloomActive = blob.effects.bloom && blob.effects.bloom > now;
   const wiltedBy = blob.wiltedUntil && blob.wiltedUntil > now;
 
+  const decay = blob.mass * DECAY_RATE;
   let delta;
   if (moving) {
-    const tax = MOVE_COST_PER_SEC * (wiltedBy ? 2 : 1);
-    delta = -tax * dt;
+    const tax = Math.max(MOVE_COST_MIN, blob.mass * MOVE_TAX_RATE) * (wiltedBy ? 2 : 1);
+    delta = -(decay + tax) * dt;
   } else {
     const gain = PHOTO_GAIN_PER_SEC * (bloomActive ? 3 : 1) * zoneMul * lightMul;
-    delta = gain * dt;
+    delta = (gain - decay) * dt;
   }
 
   blob.mass = Math.max(MIN_MASS, blob.mass + delta);

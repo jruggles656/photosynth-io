@@ -33,6 +33,8 @@ export class Renderer {
     this.vision = false;
     this.particles = [];
     this.plankton = [];
+    this.drawR = new Map(); // blob id → eased draw radius (logical radius lags visually)
+    this.pulse = new Map(); // blob id → eat-overshoot amount
     this.resize();
     window.addEventListener('resize', () => this.resize());
     this.seedPlankton();
@@ -83,12 +85,18 @@ export class Renderer {
     for (const e of events) {
       if (!this.inView(e.x, e.y, 200)) continue;
       switch (e.type) {
-        case 'eat-pellet':
-          this.burst(e.x, e.y, e.color ?? PELLET_TINTS[e.tint ?? 0], 4, 60, 0.4);
+        case 'eat-pellet': {
+          const color = e.color ?? PELLET_TINTS[e.tint ?? 0];
+          this.suck(e.x, e.y, color, e.eaterId);
+          this.burst(e.x, e.y, color, 2, 50, 0.3);
+          this.bumpPulse(e.eaterId, 0.03);
           break;
+        }
         case 'eat-blob': {
           const count = Math.min(26, Math.max(8, Math.round(e.mass / 4)));
           this.burst(e.x, e.y, e.color, count, 180, 0.9);
+          this.absorb(e.x, e.y, e.color, Math.sqrt(e.mass) * 3.2, e.eaterId);
+          this.bumpPulse(e.eaterId, 0.1);
           if (e.eaterOwnerId === playerOwnerId) this.zoomKick = Math.min(0.1, this.zoomKick + 0.05);
           if (e.victimOwnerId === playerOwnerId) this.shake = 16;
           break;
@@ -150,6 +158,22 @@ export class Renderer {
     });
   }
 
+  // Pellet visibly slides into the eater instead of vanishing.
+  suck(x, y, color, targetId) {
+    if (this.particles.length > PARTICLE_CAP) return;
+    this.particles.push({ kind: 'suck', x, y, vx: 0, vy: 0, life: 0, ttl: 0.35, size: 4, color, targetId });
+  }
+
+  // Eaten blob shrinks into the predator over ~200ms.
+  absorb(x, y, color, size, targetId) {
+    this.particles.push({ kind: 'absorb', x, y, vx: 0, vy: 0, life: 0, ttl: 0.25, size, color, targetId });
+  }
+
+  bumpPulse(id, amount) {
+    if (id === undefined) return;
+    this.pulse.set(id, Math.min(0.2, (this.pulse.get(id) ?? 0) + amount));
+  }
+
   // ---- main draw ----
 
   draw(dt, opts = {}) {
@@ -161,6 +185,13 @@ export class Renderer {
     // decay cosmetic kicks
     this.zoomKick *= Math.exp(-4 * dt);
     this.shake *= Math.exp(-7 * dt);
+
+    // prune eased-radius entries for dead blobs
+    if (this.drawR.size > 200) {
+      for (const id of this.drawR.keys()) {
+        if (!world.blobs.has(id)) this.drawR.delete(id);
+      }
+    }
 
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
 
@@ -428,7 +459,6 @@ export class Renderer {
   // ---- blobs ----
 
   drawBlob(ctx, b, now, t, light, dt) {
-    const r = b.radius;
     const ghost = b.effects.ghost && b.effects.ghost > now;
     const bloom = b.effects.bloom && b.effects.bloom > now;
     const wilt = b.effects.wilt && b.effects.wilt > now;
@@ -443,6 +473,17 @@ export class Renderer {
     const inShade = zone?.type === 'shade';
     const photosynthesizing = still && !inShade && b.alive;
 
+    // Eased draw radius: logical size changes instantly, the body animates.
+    // Eat pulses overshoot the target briefly (the "gulp").
+    let pulse = this.pulse.get(b.id) ?? 0;
+    pulse *= Math.exp(-6 * dt);
+    if (pulse < 0.004) this.pulse.delete(b.id);
+    else this.pulse.set(b.id, pulse);
+    const targetR = b.radius * (1 + pulse);
+    let r = this.drawR.get(b.id) ?? b.radius;
+    r += (targetR - r) * (1 - Math.exp(-dt / 0.12));
+    this.drawR.set(b.id, r);
+
     // photosynthesis motes — visible "growing" state
     if (photosynthesizing && Math.random() < dt * (3 + r / 18) * (0.4 + light)) {
       const a = Math.random() * Math.PI * 2;
@@ -450,9 +491,9 @@ export class Renderer {
       this.mote(b.x + Math.cos(a) * d, b.y + Math.sin(a) * d, bloom ? '#ff8ad8' : '#b8ffd4');
     }
 
+    const baseAlpha = ghost ? 0.45 : inShade ? 0.62 : 1;
     ctx.save();
-    if (ghost) ctx.globalAlpha = 0.45;
-    else if (inShade) ctx.globalAlpha = 0.62;
+    ctx.globalAlpha = baseAlpha;
 
     // aura glow
     let glowColor = null;
@@ -463,6 +504,15 @@ export class Renderer {
     else if (inGrove) { glowColor = '#ffd87a'; glowSize = 20 + light * 14; }
     else if (photosynthesizing) { glowColor = b.color; glowSize = 8 + light * 10; }
 
+    // Squash & stretch along the velocity axis (area-conserving) — the
+    // cheapest way a circle reads as a liquid body instead of a token.
+    const sx = 1 + 0.14 * Math.min(1, speed / 280);
+    const velAngle = Math.atan2(b.vy, b.vx);
+    ctx.translate(b.x, b.y);
+    ctx.rotate(velAngle);
+    ctx.scale(sx, 1 / sx);
+    ctx.rotate(-velAngle);
+
     // membrane wobble path — calm when rooted, agitated when swimming
     const wobAmp = r * Math.min(0.075, 0.018 + speed / 2600);
     const wobSpeed = still ? 1.2 : 3.2;
@@ -471,7 +521,7 @@ export class Renderer {
     for (let i = 0; i < n; i++) {
       const a = (i / n) * Math.PI * 2;
       const rr = r + wobAmp * Math.sin(a * 3 + t * wobSpeed + b.seed) + wobAmp * 0.6 * Math.sin(a * 5 - t * wobSpeed * 1.4 + b.seed * 2);
-      pts.push([b.x + Math.cos(a) * rr, b.y + Math.sin(a) * rr]);
+      pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
     }
 
     const bodyPath = () => {
@@ -495,9 +545,9 @@ export class Renderer {
 
     // cell body — lit nucleus side, darker membrane edge
     const vlen = speed || 1;
-    const lx = b.x + (b.vx / vlen) * r * 0.2;
-    const ly = b.y + (b.vy / vlen) * r * 0.2;
-    const body = ctx.createRadialGradient(lx, ly, r * 0.1, b.x, b.y, r);
+    const lx = (b.vx / vlen) * r * 0.2;
+    const ly = (b.vy / vlen) * r * 0.2;
+    const body = ctx.createRadialGradient(lx, ly, r * 0.1, 0, 0, r);
     body.addColorStop(0, shadeColor(b.color, 0.45));
     body.addColorStop(0.65, b.color);
     body.addColorStop(1, shadeColor(b.color, -0.38));
@@ -511,18 +561,27 @@ export class Renderer {
       ctx.save();
       bodyPath();
       ctx.clip();
-      ctx.translate(b.x, b.y);
       drawSkinPattern(ctx, b.skin, r, t, b.seed);
       ctx.restore();
     }
 
-    // nucleus
+    // nucleus + pupil that watches where the blob wants to go
     ctx.fillStyle = shadeColor(b.color, 0.55);
-    ctx.globalAlpha *= 0.55;
+    ctx.globalAlpha = baseAlpha * 0.55;
     ctx.beginPath();
     ctx.arc(lx, ly, r * 0.28, 0, Math.PI * 2);
     ctx.fill();
-    ctx.globalAlpha = ghost ? 0.45 : inShade ? 0.62 : 1;
+    const tdx = b.targetX - b.x;
+    const tdy = b.targetY - b.y;
+    const tlen = Math.hypot(tdx, tdy);
+    if (tlen > 4 && r > 10) {
+      ctx.fillStyle = shadeColor(b.color, -0.55);
+      ctx.globalAlpha = baseAlpha * 0.6;
+      ctx.beginPath();
+      ctx.arc(lx + (tdx / tlen) * r * 0.1, ly + (tdy / tlen) * r * 0.1, r * 0.1, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = baseAlpha;
 
     // membrane rim
     ctx.strokeStyle = shadeColor(b.color, photosynthesizing ? 0.5 : 0.25);
@@ -534,11 +593,11 @@ export class Renderer {
     if (shield) {
       ctx.strokeStyle = '#5fa0ff';
       ctx.lineWidth = 4;
-      ctx.globalAlpha *= 0.5 + 0.5 * Math.abs(Math.sin(t * 4));
+      ctx.globalAlpha = baseAlpha * (0.5 + 0.5 * Math.abs(Math.sin(t * 4)));
       ctx.beginPath();
-      ctx.arc(b.x, b.y, r + 6, 0, Math.PI * 2);
+      ctx.arc(0, 0, r + 6, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.globalAlpha = ghost ? 0.45 : inShade ? 0.62 : 1;
+      ctx.globalAlpha = baseAlpha;
     }
     if (speedFx) {
       ctx.strokeStyle = '#ffd24a';
@@ -546,12 +605,16 @@ export class Renderer {
       ctx.setLineDash([7, 5]);
       ctx.lineDashOffset = -t * 40;
       ctx.beginPath();
-      ctx.arc(b.x, b.y, r + 3, 0, Math.PI * 2);
+      ctx.arc(0, 0, r + 3, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
     }
 
-    // labels
+    ctx.restore();
+
+    // labels — drawn unstretched, in world coords
+    ctx.save();
+    ctx.globalAlpha = baseAlpha;
     if (b.mass > 25) {
       ctx.fillStyle = 'rgba(4,16,12,0.85)';
       ctx.font = `600 ${Math.max(10, r * 0.36)}px "Spline Sans Mono", ui-monospace, monospace`;
@@ -566,7 +629,6 @@ export class Renderer {
       ctx.textBaseline = 'top';
       ctx.fillText(b.name, b.x, b.y + r + 5);
     }
-
     ctx.restore();
   }
 
@@ -579,6 +641,28 @@ export class Renderer {
       p.life += dt;
       if (p.life >= p.ttl) {
         this.particles.splice(i, 1);
+        continue;
+      }
+      // suck/absorb home in on their eater and die inside it
+      if (p.kind === 'suck' || p.kind === 'absorb') {
+        const eater = this.world.blobs.get(p.targetId);
+        if (!eater) {
+          this.particles.splice(i, 1);
+          continue;
+        }
+        const hk = 1 - Math.exp(-dt / 0.07);
+        p.x += (eater.x - p.x) * hk;
+        p.y += (eater.y - p.y) * hk;
+        if (Math.hypot(eater.x - p.x, eater.y - p.y) < eater.radius * 0.5) {
+          this.particles.splice(i, 1);
+          continue;
+        }
+        const kk = p.life / p.ttl;
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.kind === 'suck' ? 0.9 * (1 - kk) : 0.8 * (1 - kk * 0.6);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * (1 - kk * 0.7), 0, Math.PI * 2);
+        ctx.fill();
         continue;
       }
       p.x += p.vx * dt;

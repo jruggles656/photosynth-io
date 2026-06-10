@@ -2,7 +2,13 @@
 
 ## What This Is
 
-A browser-based agar.io-style game with a photosynthesis economy (still = grow, move = burn) layered with a day/night cycle, terrain zones (sun groves ×2 photo / shade = stealth + no photo), thorn hazards that pop big blobs, power-up pellets, bot personalities, skins, and synthesized audio.
+A browser-based agar.io-style game with a photosynthesis economy (still = grow, move = burn) layered with a day/night cycle, terrain zones (sun groves ×2 photo / shade = stealth + no photo), thorn hazards that pop big blobs, power-up pellets, bot personalities, skins, missions, and synthesized audio.
+
+Key tuning facts (researched against agar.io's actual numbers — see git history):
+- Movement: cursor-distance throttle + velocity smoothing (inertia); maxSpeed = 660/radius^0.449 (agar's curve). No discrete stop state.
+- Economy: 0.2%/s proportional decay on everything + proportional move tax — photosynthesis alone caps out ~500-800 mass; the leader must hunt. Big victims scatter 20% of mass as pellets (corpse economy → bot feeding frenzies).
+- Bots: 180-400ms reaction time, rooted blobs read as flora (ambush hunting), hunters split-pounce at 2.8x advantage and see 30% further at night.
+- Missions: Jetpack Joyride model — 3 active (short/medium/long tiers), pool in main.js, persisted with stars in localStorage.
 
 Vanilla JS + HTML5 Canvas, Vite for tooling, deploys to GitHub Pages. Aesthetic: bioluminescent abyssal garden — Fraunces (display) + Spline Sans Mono (UI), palette in `:root` CSS vars in index.html.
 

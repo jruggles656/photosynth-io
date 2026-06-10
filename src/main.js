@@ -19,10 +19,30 @@ const POWERUP_COLORS = {
   ghost: '#cfcfff', bloom: '#ff8ad8', wilt: '#9a5ab0',
 };
 
+// ---- missions (Jetpack Joyride model: 3 active, tiered, always replaceable) ----
+
+const MISSION_POOL = [
+  { id: 'pellets40', tier: 'short', text: 'eat 40 pellets in one life', stat: 'pellets', target: 40, perRun: true },
+  { id: 'gold3', tier: 'short', text: 'eat 3 gold pellets', stat: 'gold', target: 3 },
+  { id: 'powerups4', tier: 'short', text: 'grab 4 power-ups', stat: 'powerups', target: 4 },
+  { id: 'mass150', tier: 'short', text: 'reach 150 mass', stat: 'peakMass', target: 150, perRun: true },
+  { id: 'kill3', tier: 'medium', text: 'consume 3 blobs in one life', stat: 'kills', target: 3, perRun: true },
+  { id: 'pounce2', tier: 'medium', text: 'pounce-kill 2 blobs in one life', stat: 'pounceKills', target: 2, perRun: true },
+  { id: 'night1', tier: 'medium', text: 'survive a full night', stat: 'nights', target: 1, perRun: true },
+  { id: 'mass300', tier: 'medium', text: 'reach 300 mass', stat: 'peakMass', target: 300, perRun: true },
+  { id: 'days3', tier: 'long', text: 'survive 3 days in one life', stat: 'days', target: 3, perRun: true },
+  { id: 'apex', tier: 'long', text: 'become #1 in the garden', stat: 'apex', target: 1, perRun: true },
+  { id: 'mass500', tier: 'long', text: 'reach 500 mass', stat: 'peakMass', target: 500, perRun: true },
+  { id: 'kills15', tier: 'long', text: 'consume 15 blobs (lifetime)', stat: 'kills', target: 15 },
+];
+const MISSION_BY_ID = Object.fromEntries(MISSION_POOL.map((m) => [m.id, m]));
+
 // ---- persistence ----
 
 const PROFILE_KEY = 'photosynth.profile.v1';
 const BEST_KEY = 'photosynth.best.v1';
+const MISSIONS_KEY = 'photosynth.missions.v1';
+const STARS_KEY = 'photosynth.stars.v1';
 
 function loadJson(key, fallback) {
   try {
@@ -34,9 +54,30 @@ function loadJson(key, fallback) {
 
 const profile = loadJson(PROFILE_KEY, { name: '', color: BLOB_COLORS[0], skin: 'plain', muted: false });
 let bests = loadJson(BEST_KEY, { peakMass: 0, longestSec: 0, kills: 0, games: 0 });
+let stars = Number(localStorage.getItem(STARS_KEY) || 0);
 
 const saveProfile = () => localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
 const saveBests = () => localStorage.setItem(BEST_KEY, JSON.stringify(bests));
+const saveStars = () => localStorage.setItem(STARS_KEY, String(stars));
+
+function pickMission(tier, excludeIds) {
+  const candidates = MISSION_POOL.filter((m) => m.tier === tier && !excludeIds.includes(m.id));
+  const pool = candidates.length ? candidates : MISSION_POOL.filter((m) => m.tier === tier);
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+let missions;
+try {
+  missions = JSON.parse(localStorage.getItem(MISSIONS_KEY));
+  if (!Array.isArray(missions) || missions.length !== 3 || missions.some((m) => !MISSION_BY_ID[m.id])) missions = null;
+} catch {
+  missions = null;
+}
+if (!missions) {
+  missions = ['short', 'medium', 'long'].map((tier) => ({ id: pickMission(tier, []).id, progress: 0 }));
+}
+const saveMissions = () => localStorage.setItem(MISSIONS_KEY, JSON.stringify(missions));
+saveMissions();
 
 // ---- setup ----
 
@@ -69,7 +110,55 @@ let lastEaterName = null;
 let effectsKey = ''; // change-detector for effect chips
 let leaderTimer = 1; // > threshold so the board paints on the first frame
 let shimmerTimer = 0;
+let hitStop = 0; // seconds of near-freeze remaining (kill impact)
+let pelletCombo = 0;
+let lastPelletAt = 0;
 const massHistory = []; // [t, mass] ring for the rate readout
+
+// ---- mission helpers ----
+
+function missionProgress(m) {
+  const def = MISSION_BY_ID[m.id];
+  const runVal = run ? (run[def.stat] ?? 0) : 0;
+  return def.perRun ? runVal : m.progress + runVal;
+}
+
+function checkMissions() {
+  if (!run) return;
+  for (let i = 0; i < missions.length; i++) {
+    const m = missions[i];
+    const def = MISSION_BY_ID[m.id];
+    if (missionProgress(m) >= def.target) {
+      stars++;
+      saveStars();
+      toast(`✦ mission complete · ${def.text}`);
+      sound.powerup();
+      const next = pickMission(def.tier, missions.map((x) => x.id));
+      missions[i] = { id: next.id, progress: 0 };
+      saveMissions();
+    }
+  }
+}
+
+function renderMissionList(el) {
+  el.innerHTML = missions
+    .map((m) => {
+      const def = MISSION_BY_ID[m.id];
+      const prog = Math.min(def.target, Math.floor(missionProgress(m)));
+      const close = prog > 0 && prog >= def.target * 0.6;
+      return `<div class="mission-row${close ? ' close' : ''}"><span>${def.text}</span><span class="mission-prog">${prog}/${def.target}</span></div>`;
+    })
+    .join('');
+}
+
+let toastTimer = null;
+function toast(text) {
+  const el = $('toast');
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+}
 
 function setState(next) {
   state = next;
@@ -153,7 +242,7 @@ function refreshBestLine() {
   const mins = Math.floor(bests.longestSec / 60);
   const secs = Math.floor(bests.longestSec % 60).toString().padStart(2, '0');
   $('best-line').textContent = bests.games
-    ? `best mass ${Math.round(bests.peakMass)} · longest ${mins}:${secs} · ${bests.games} ${bests.games === 1 ? 'life' : 'lives'}`
+    ? `best mass ${Math.round(bests.peakMass)} · longest ${mins}:${secs} · ✦ ${stars}`
     : 'first bloom — good luck out there';
 }
 
@@ -161,6 +250,7 @@ $('name-input').value = profile.name;
 buildColorRow();
 buildSkinRow();
 refreshBestLine();
+renderMissionList($('missions-start'));
 
 // ---- run lifecycle ----
 
@@ -173,15 +263,25 @@ function startGame() {
   world.spawnPlayer({ name: profile.name, ownerId: PLAYER_OWNER_ID, color: profile.color, skin: profile.skin });
   run = {
     startedAt: performance.now(),
+    startDay: world.day,
     peakMass: 20,
     kills: 0,
     pellets: 0,
+    gold: 0,
     powerups: 0,
+    pounceKills: 0,
+    nights: 0,
+    days: 0,
+    apex: 0,
+    nightSeen: false,
+    lastSplitAt: 0,
   };
   lastEaterName = null;
   massHistory.length = 0;
   effectsKey = '';
   leaderTimer = 1;
+  pelletCombo = 0;
+  hitStop = 0;
   $('effects').innerHTML = '';
   setState('playing');
 }
@@ -212,8 +312,17 @@ function endGame() {
   $('stat-peak').textContent = Math.round(run.peakMass);
   $('stat-peak').classList.toggle('gold', newBestMass);
   $('stat-kills').textContent = run.kills;
-  $('stat-pellets').textContent = run.pellets;
+  $('stat-days').textContent = run.days + 1;
   $('new-best').style.display = newBestMass || newBestTime ? 'block' : 'none';
+
+  // Mission near-misses are the one-more-run trigger — render with run stats
+  // still live, then bank lifetime progress.
+  renderMissionList($('missions-death'));
+  for (const m of missions) {
+    const def = MISSION_BY_ID[m.id];
+    if (!def.perRun) m.progress += run[def.stat] ?? 0;
+  }
+  saveMissions();
   const unlockNote = $('unlock-note');
   if (newSkins > 0) {
     const names = unlockedAfter.slice(-newSkins).map((s) => s.name).join(', ');
@@ -225,8 +334,10 @@ function endGame() {
 
   sound.death();
   setState('dead');
+  run = null;
   refreshBestLine();
   buildSkinRow();
+  renderMissionList($('missions-start'));
 }
 
 $('play-btn').addEventListener('click', startGame);
@@ -264,13 +375,22 @@ function handleEvents(events) {
       case 'eat-pellet':
         if (e.ownerId === PLAYER_OWNER_ID) {
           run.pellets++;
-          if (e.tint === 3) sound.goldEat();
-          else sound.eat();
+          const tnow = performance.now();
+          pelletCombo = tnow - lastPelletAt < 1000 ? pelletCombo + 1 : 0;
+          lastPelletAt = tnow;
+          if (e.tint === 3) {
+            run.gold++;
+            sound.goldEat();
+          } else {
+            sound.eat(pelletCombo);
+          }
         }
         break;
       case 'eat-blob':
         if (e.eaterOwnerId === PLAYER_OWNER_ID) {
           run.kills++;
+          if (performance.now() - run.lastSplitAt < 1200) run.pounceKills++;
+          hitStop = Math.min(0.12, 0.04 + e.mass / 2500);
           sound.kill();
         }
         if (e.victimOwnerId === PLAYER_OWNER_ID) {
@@ -285,7 +405,10 @@ function handleEvents(events) {
         }
         break;
       case 'split':
-        if (e.ownerId === PLAYER_OWNER_ID) sound.split();
+        if (e.ownerId === PLAYER_OWNER_ID) {
+          run.lastSplitAt = performance.now();
+          sound.split();
+        }
         break;
       case 'eject':
         if (e.ownerId === PLAYER_OWNER_ID) sound.eject();
@@ -348,7 +471,15 @@ function updateHud(pieces, totalMass, now) {
   const light = world.lightLevel;
   const mul = 0.4 + 1.2 * light;
   $('day-pill').firstElementChild.textContent = light > 0.5 ? '☀' : '☾';
-  $('day-text').textContent = `photosynthesis ×${mul.toFixed(1)}`;
+  $('day-text').textContent = `day ${world.day - run.startDay + 1} · photosynthesis ×${mul.toFixed(1)}`;
+
+  // run-arc stats: completed days and full nights survived
+  run.days = world.day - run.startDay;
+  if (light < 0.1) run.nightSeen = true;
+  if (run.nightSeen && light > 0.5) {
+    run.nights++;
+    run.nightSeen = false;
+  }
 }
 
 // Effect chips rebuild only when the active set changes; CSS animates the drain bar.
@@ -375,6 +506,7 @@ function updateLeaderboard() {
     byOwner.set(b.ownerId, entry);
   }
   const entries = [...byOwner.values()].sort((a, b) => b.mass - a.mass).slice(0, 8);
+  if (run && entries[0]?.mine) run.apex = 1;
   $('leaders').innerHTML = entries
     .map((e, i) => `<li class="${e.mine ? 'you' : ''}"><span><span class="rank">${i + 1}</span>${escapeHtml(e.name)}</span><span>${Math.round(e.mass)}</span></li>`)
     .join('');
@@ -389,8 +521,14 @@ function escapeHtml(s) {
 let last = performance.now();
 
 function frame(now) {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const rawDt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  // Hit-stop: world near-freezes for a beat on kills; particles/camera keep moving.
+  let dt = rawDt;
+  if (hitStop > 0) {
+    hitStop -= rawDt;
+    dt = rawDt * 0.08;
+  }
 
   if (state === 'playing') {
     const pieces = world.getOwnedBlobs(PLAYER_OWNER_ID);
@@ -426,12 +564,13 @@ function frame(now) {
 
     const nowMs = Date.now();
     renderer.vision = pieces.some((p) => p.effects.vision && p.effects.vision > nowMs);
-    renderer.setView({ x: cx, y: cy, mass: totalMass }, dt);
-    renderer.draw(dt);
+    renderer.setView({ x: cx, y: cy, mass: totalMass }, rawDt);
+    renderer.draw(rawDt);
     renderer.drawMinimap($('minimap'), pieces, renderer.vision);
 
     updateHud(pieces, totalMass, now);
     updateEffectChips(pieces[0], nowMs);
+    checkMissions();
 
     // soft shimmer while actually growing
     const still = pieces.every((p) => Math.hypot(p.vx, p.vy) <= 1);

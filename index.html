@@ -308,6 +308,42 @@
         font-weight: 600;
       }
 
+      /* ============ missions ============ */
+
+      .mission-list { display: flex; flex-direction: column; gap: 5px; }
+      .mission-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 11.5px;
+        color: var(--dim);
+        letter-spacing: 0.03em;
+      }
+      .mission-row.close { color: var(--text); }
+      .mission-row.close .mission-prog { color: var(--sun); }
+      .mission-prog { color: var(--dim); flex-shrink: 0; }
+
+      #toast {
+        position: fixed;
+        top: 64px;
+        left: 50%;
+        transform: translate(-50%, -8px);
+        z-index: 15;
+        background: var(--glass-bright);
+        border: 1px solid rgba(255, 216, 122, 0.4);
+        border-radius: 999px;
+        padding: 9px 20px;
+        font-size: 12.5px;
+        letter-spacing: 0.06em;
+        color: var(--sun);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.3s, transform 0.3s;
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+      }
+      #toast.show { opacity: 1; transform: translate(-50%, 0); }
+
       /* ============ in-game HUD ============ */
 
       .game-ui { position: fixed; z-index: 10; pointer-events: none; }
@@ -547,6 +583,10 @@
           <div class="field-label">membrane</div>
           <div class="skin-row" id="skin-row"></div>
         </div>
+        <div>
+          <div class="field-label">missions</div>
+          <div id="missions-start" class="mission-list"></div>
+        </div>
         <button id="play-btn">enter the garden</button>
         <div class="best-line" id="best-line"></div>
       </div>
@@ -565,10 +605,14 @@
           <div class="stat"><div class="num" id="stat-time">0:00</div><div class="lbl">survived</div></div>
           <div class="stat"><div class="num" id="stat-peak">0</div><div class="lbl">peak mass</div></div>
           <div class="stat"><div class="num" id="stat-kills">0</div><div class="lbl">blobs eaten</div></div>
-          <div class="stat"><div class="num" id="stat-pellets">0</div><div class="lbl">pellets</div></div>
+          <div class="stat"><div class="num" id="stat-days">1</div><div class="lbl">days seen</div></div>
         </div>
         <div id="new-best">✦ new personal best ✦</div>
         <div id="unlock-note"></div>
+        <div>
+          <div class="field-label">missions</div>
+          <div id="missions-death" class="mission-list"></div>
+        </div>
         <div class="btn-row">
           <button class="btn-ghost" id="menu-btn">menu</button>
           <button class="btn-ghost primary" id="respawn-btn">regrow</button>
@@ -598,6 +642,9 @@
       <b>space</b> split · <b>W</b> eject · <b>S</b> root · <b>M</b> mute
     </div>
     <button id="mute-btn" title="mute (M)">♪</button>
+
+    <!-- mission toast -->
+    <div id="toast"></div>
 
     <!-- touch controls -->
     <div id="joy"><div id="joy-thumb"></div></div>

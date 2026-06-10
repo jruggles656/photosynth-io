@@ -92,8 +92,12 @@ export class SoundEngine {
     src.start(t);
   }
 
-  eat() {
-    this.note(480 + Math.random() * 260, { dur: 0.07, vol: 0.16 });
+  // Pellet eats climb a pitch ladder while the streak is alive (combo resets
+  // after ~1s of no eating, handled by the caller).
+  eat(combo = 0) {
+    const step = Math.min(12, combo);
+    const freq = (470 + Math.random() * 60) * Math.pow(1.0595, step);
+    this.note(freq, { dur: 0.07, vol: 0.16 });
   }
 
   goldEat() {

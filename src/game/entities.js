@@ -16,8 +16,11 @@ export class Blob {
     this.y = y;
     this.vx = 0;
     this.vy = 0;
+    this.mvx = 0; // smoothed steering velocity (inertia)
+    this.mvy = 0;
     this.ix = 0; // launch impulse (split pounce, thorn scatter); decays in moveBlob
     this.iy = 0;
+    this.wantsSplit = false; // set by bot AI; processed by world.tick
     this.mass = mass;
     this.name = name;
     this.isPlayer = isPlayer;

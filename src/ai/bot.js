@@ -34,6 +34,8 @@ export function decideBotMove(bot, world) {
   bot.nextThink = world.time + 0.18 + Math.random() * 0.22;
 
   const P = PERSONALITIES[bot.personality] ?? PERSONALITIES.coward;
+  // Hunters see further in the dark — nights are dangerous.
+  const sight = bot.personality === 'hunter' && world.lightLevel < 0.35 ? P.sight * 1.3 : P.sight;
 
   let nearestThreat = null;
   let threatDist2 = Infinity;
@@ -44,7 +46,7 @@ export function decideBotMove(bot, world) {
     if (other.id === bot.id || !other.alive) continue;
     if (other.ownerId !== null && other.ownerId === bot.ownerId) continue;
     const d2 = (other.x - bot.x) ** 2 + (other.y - bot.y) ** 2;
-    if (d2 > P.sight * P.sight) continue;
+    if (d2 > sight * sight) continue;
 
     // Shade stealth: blobs sitting in shade are invisible beyond close range.
     if (d2 > 150 * 150) {
@@ -119,6 +121,15 @@ export function decideBotMove(bot, world) {
   if (nearestPrey) {
     bot.targetX = nearestPrey.x;
     bot.targetY = nearestPrey.y;
+    // Split-pounce when the math is overwhelming — the genre's jump-scare.
+    if (
+      bot.mass > nearestPrey.mass * 2.8 &&
+      bot.mass >= 64 &&
+      preyDist2 < 340 * 340 &&
+      Math.random() < 0.4
+    ) {
+      bot.wantsSplit = true;
+    }
     avoidThorns(bot, world);
     return;
   }
