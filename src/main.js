@@ -1,129 +1,467 @@
-// Entry point. Wires world + input + transport + renderer together.
+// Entry point. Wires world + input + transport + renderer + sound + UI together.
+// Also owns the client-side meta layer: profile, personal bests, skin unlocks.
 
 import { World } from './game/world.js';
+import { BLOB_COLORS } from './game/entities.js';
 import { Renderer } from './render/renderer.js';
+import { SKINS, drawSkinPattern } from './render/skins.js';
 import { Input } from './input/input.js';
 import { LocalTransport } from './net/local.js';
+import { SoundEngine } from './audio/sound.js';
 
 const PLAYER_OWNER_ID = 1;
 const POWERUP_GLYPHS = {
   speed: '⚡', shield: '🛡', vision: '👁', magnet: '🧲',
   ghost: '👻', bloom: '🌸', wilt: '🥀',
 };
+const POWERUP_COLORS = {
+  speed: '#ffd24a', shield: '#5fa0ff', vision: '#e8fbff', magnet: '#ff7a5a',
+  ghost: '#cfcfff', bloom: '#ff8ad8', wilt: '#9a5ab0',
+};
 
-const canvas = document.getElementById('game');
-const hud = document.getElementById('hud');
-const effectsEl = document.getElementById('effects');
-const leadersEl = document.getElementById('leaders');
+// ---- persistence ----
+
+const PROFILE_KEY = 'photosynth.profile.v1';
+const BEST_KEY = 'photosynth.best.v1';
+
+function loadJson(key, fallback) {
+  try {
+    return { ...fallback, ...JSON.parse(localStorage.getItem(key) || '{}') };
+  } catch {
+    return { ...fallback };
+  }
+}
+
+const profile = loadJson(PROFILE_KEY, { name: '', color: BLOB_COLORS[0], skin: 'plain', muted: false });
+let bests = loadJson(BEST_KEY, { peakMass: 0, longestSec: 0, kills: 0, games: 0 });
+
+const saveProfile = () => localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+const saveBests = () => localStorage.setItem(BEST_KEY, JSON.stringify(bests));
+
+// ---- setup ----
+
+const $ = (id) => document.getElementById(id);
+const canvas = $('game');
 
 const world = new World({ width: 4000, height: 4000 });
 world.seedPellets(400);
-world.spawnPlayer('you', PLAYER_OWNER_ID);
-for (let i = 0; i < 20; i++) world.spawnBot(`bot-${i}`);
+for (let i = 0; i < 20; i++) world.spawnBot();
 
 const transport = new LocalTransport(world);
 const input = new Input(canvas);
 const renderer = new Renderer(canvas, world);
+const sound = new SoundEngine();
+sound.muted = profile.muted;
+
+input.bindTouch({
+  joyEl: $('joy'),
+  thumbEl: $('joy-thumb'),
+  splitBtn: $('btn-split'),
+  ejectBtn: $('btn-eject'),
+});
+if ('ontouchstart' in window) document.body.classList.add('touch');
+
+// ---- state machine ----
+
+let state = 'menu'; // 'menu' | 'playing' | 'dead'
+let run = null; // current run stats
+let lastEaterName = null;
+let effectsKey = ''; // change-detector for effect chips
+let leaderTimer = 1; // > threshold so the board paints on the first frame
+let shimmerTimer = 0;
+const massHistory = []; // [t, mass] ring for the rate readout
+
+function setState(next) {
+  state = next;
+  document.body.dataset.state = next;
+  input.enabled = next === 'playing';
+}
+
+// ---- start screen ----
+
+function buildColorRow() {
+  const row = $('color-row');
+  row.innerHTML = '';
+  for (const c of BLOB_COLORS) {
+    const btn = document.createElement('button');
+    btn.className = 'swatch' + (c === profile.color ? ' selected' : '');
+    btn.style.color = c;
+    btn.innerHTML = `<span class="dot" style="background:${c}"></span>`;
+    btn.addEventListener('click', () => {
+      profile.color = c;
+      saveProfile();
+      buildColorRow();
+      buildSkinRow();
+    });
+    row.appendChild(btn);
+  }
+}
+
+function buildSkinRow() {
+  const row = $('skin-row');
+  row.innerHTML = '';
+  for (const skin of SKINS) {
+    const unlocked = bests.peakMass >= skin.unlock;
+    const btn = document.createElement('button');
+    btn.className = 'skin-btn' + (skin.id === profile.skin ? ' selected' : '') + (unlocked ? '' : ' locked');
+    const thumb = document.createElement('canvas');
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    thumb.width = 40 * dpr;
+    thumb.height = 40 * dpr;
+    thumb.style.width = '40px';
+    thumb.style.height = '40px';
+    const tctx = thumb.getContext('2d');
+    tctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    tctx.translate(20, 20);
+    const g = tctx.createRadialGradient(-4, -4, 2, 0, 0, 16);
+    g.addColorStop(0, '#ffffff55');
+    g.addColorStop(0.4, profile.color);
+    g.addColorStop(1, '#00000055');
+    tctx.fillStyle = profile.color;
+    tctx.beginPath();
+    tctx.arc(0, 0, 16, 0, Math.PI * 2);
+    tctx.fill();
+    tctx.fillStyle = g;
+    tctx.fill();
+    tctx.save();
+    tctx.beginPath();
+    tctx.arc(0, 0, 16, 0, Math.PI * 2);
+    tctx.clip();
+    drawSkinPattern(tctx, skin.id, 16, 1.5, 2.1);
+    tctx.restore();
+    btn.appendChild(thumb);
+    const label = document.createElement('span');
+    label.textContent = skin.name;
+    btn.appendChild(label);
+    if (!unlocked) {
+      const lock = document.createElement('span');
+      lock.className = 'lock';
+      lock.textContent = `🔒 ${skin.unlock}`;
+      btn.appendChild(lock);
+    } else {
+      btn.addEventListener('click', () => {
+        profile.skin = skin.id;
+        saveProfile();
+        buildSkinRow();
+      });
+    }
+    row.appendChild(btn);
+  }
+}
+
+function refreshBestLine() {
+  const mins = Math.floor(bests.longestSec / 60);
+  const secs = Math.floor(bests.longestSec % 60).toString().padStart(2, '0');
+  $('best-line').textContent = bests.games
+    ? `best mass ${Math.round(bests.peakMass)} · longest ${mins}:${secs} · ${bests.games} ${bests.games === 1 ? 'life' : 'lives'}`
+    : 'first bloom — good luck out there';
+}
+
+$('name-input').value = profile.name;
+buildColorRow();
+buildSkinRow();
+refreshBestLine();
+
+// ---- run lifecycle ----
+
+function startGame() {
+  profile.name = $('name-input').value.trim() || 'unnamed';
+  saveProfile();
+  sound.init();
+  sound.setMuted(profile.muted);
+
+  world.spawnPlayer({ name: profile.name, ownerId: PLAYER_OWNER_ID, color: profile.color, skin: profile.skin });
+  run = {
+    startedAt: performance.now(),
+    peakMass: 20,
+    kills: 0,
+    pellets: 0,
+    powerups: 0,
+  };
+  lastEaterName = null;
+  massHistory.length = 0;
+  effectsKey = '';
+  leaderTimer = 1;
+  $('effects').innerHTML = '';
+  setState('playing');
+}
+
+function endGame() {
+  const survived = (performance.now() - run.startedAt) / 1000;
+  const mins = Math.floor(survived / 60);
+  const secs = Math.floor(survived % 60).toString().padStart(2, '0');
+
+  const newBestMass = run.peakMass > bests.peakMass;
+  const newBestTime = survived > bests.longestSec;
+  const unlockedBefore = SKINS.filter((s) => bests.peakMass >= s.unlock).length;
+
+  bests.peakMass = Math.max(bests.peakMass, run.peakMass);
+  bests.longestSec = Math.max(bests.longestSec, survived);
+  bests.kills += run.kills;
+  bests.games += 1;
+  saveBests();
+
+  const unlockedAfter = SKINS.filter((s) => bests.peakMass >= s.unlock);
+  const newSkins = unlockedAfter.length - unlockedBefore;
+
+  $('death-by').innerHTML = lastEaterName
+    ? `by <b>${escapeHtml(lastEaterName)}</b>`
+    : 'returned to the soil';
+  $('stat-time').textContent = `${mins}:${secs}`;
+  $('stat-time').classList.toggle('gold', newBestTime);
+  $('stat-peak').textContent = Math.round(run.peakMass);
+  $('stat-peak').classList.toggle('gold', newBestMass);
+  $('stat-kills').textContent = run.kills;
+  $('stat-pellets').textContent = run.pellets;
+  $('new-best').style.display = newBestMass || newBestTime ? 'block' : 'none';
+  const unlockNote = $('unlock-note');
+  if (newSkins > 0) {
+    const names = unlockedAfter.slice(-newSkins).map((s) => s.name).join(', ');
+    unlockNote.textContent = `new membrane unlocked: ${names}`;
+    unlockNote.style.display = 'block';
+  } else {
+    unlockNote.style.display = 'none';
+  }
+
+  sound.death();
+  setState('dead');
+  refreshBestLine();
+  buildSkinRow();
+}
+
+$('play-btn').addEventListener('click', startGame);
+$('name-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') startGame();
+});
+$('respawn-btn').addEventListener('click', startGame);
+$('menu-btn').addEventListener('click', () => setState('menu'));
+
+const muteBtn = $('mute-btn');
+function applyMute() {
+  muteBtn.textContent = profile.muted ? '✕' : '♪';
+  muteBtn.style.opacity = profile.muted ? 0.5 : 1;
+  sound.setMuted(profile.muted);
+}
+muteBtn.addEventListener('click', () => {
+  profile.muted = !profile.muted;
+  saveProfile();
+  applyMute();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyM' && state === 'playing') {
+    profile.muted = !profile.muted;
+    saveProfile();
+    applyMute();
+  }
+});
+applyMute();
+
+// ---- per-frame event handling (stats + sound) ----
+
+function handleEvents(events) {
+  for (const e of events) {
+    switch (e.type) {
+      case 'eat-pellet':
+        if (e.ownerId === PLAYER_OWNER_ID) {
+          run.pellets++;
+          if (e.tint === 3) sound.goldEat();
+          else sound.eat();
+        }
+        break;
+      case 'eat-blob':
+        if (e.eaterOwnerId === PLAYER_OWNER_ID) {
+          run.kills++;
+          sound.kill();
+        }
+        if (e.victimOwnerId === PLAYER_OWNER_ID) {
+          lastEaterName = e.eaterName || null;
+          sound.kill();
+        }
+        break;
+      case 'powerup':
+        if (e.ownerId === PLAYER_OWNER_ID) {
+          run.powerups++;
+          sound.powerup();
+        }
+        break;
+      case 'split':
+        if (e.ownerId === PLAYER_OWNER_ID) sound.split();
+        break;
+      case 'eject':
+        if (e.ownerId === PLAYER_OWNER_ID) sound.eject();
+        break;
+      case 'pop':
+        if (e.ownerId === PLAYER_OWNER_ID) sound.pop();
+        break;
+      case 'merge':
+        if (e.ownerId === PLAYER_OWNER_ID) sound.merge();
+        break;
+      case 'shield-pop':
+        if (e.ownerId === PLAYER_OWNER_ID) sound.shieldPop();
+        break;
+    }
+  }
+}
+
+// ---- HUD ----
+
+function updateHud(pieces, totalMass, now) {
+  $('mass-num').textContent = Math.round(totalMass);
+
+  // growth rate over the last ~0.7s
+  massHistory.push([now, totalMass]);
+  while (massHistory.length > 2 && now - massHistory[0][0] > 700) massHistory.shift();
+  const rateEl = $('mass-rate');
+  if (massHistory.length > 1) {
+    const [t0, m0] = massHistory[0];
+    const dtSec = (now - t0) / 1000;
+    const rate = dtSec > 0.2 ? (totalMass - m0) / dtSec : 0;
+    if (rate > 0.05) {
+      rateEl.textContent = `▲ ${rate.toFixed(1)}/s`;
+      rateEl.className = 'up';
+    } else if (rate < -0.05) {
+      rateEl.textContent = `▼ ${Math.abs(rate).toFixed(1)}/s`;
+      rateEl.className = 'down';
+    } else {
+      rateEl.textContent = '';
+    }
+  }
+
+  $('pieces-sub').textContent = pieces.length > 1 ? `mass · ${pieces.length} pieces` : 'mass';
+
+  // zone chip
+  const zone = world.zoneAt(renderer.camera.x, renderer.camera.y);
+  const zoneChip = $('zone-chip');
+  if (zone?.type === 'grove') {
+    zoneChip.textContent = '☀ sun grove · photo ×2';
+    zoneChip.className = 'chip grove';
+    zoneChip.style.display = 'inline-block';
+  } else if (zone?.type === 'shade') {
+    zoneChip.textContent = '☁ shade · hidden · no photo';
+    zoneChip.className = 'chip shade';
+    zoneChip.style.display = 'inline-block';
+  } else {
+    zoneChip.style.display = 'none';
+  }
+
+  // day/night pill
+  const light = world.lightLevel;
+  const mul = 0.4 + 1.2 * light;
+  $('day-pill').firstElementChild.textContent = light > 0.5 ? '☀' : '☾';
+  $('day-text').textContent = `photosynthesis ×${mul.toFixed(1)}`;
+}
+
+// Effect chips rebuild only when the active set changes; CSS animates the drain bar.
+function updateEffectChips(blob, nowMs) {
+  const active = Object.entries(blob.effects).filter(([, exp]) => exp > nowMs);
+  const key = active.map(([t, exp]) => `${t}:${Math.round(exp / 500)}`).join('|');
+  if (key === effectsKey) return;
+  effectsKey = key;
+  $('effects').innerHTML = active
+    .map(([type, exp]) => {
+      const remaining = Math.max(0, (exp - nowMs) / 1000);
+      const color = POWERUP_COLORS[type] || '#fff';
+      return `<span class="chip" style="color:${color}">${POWERUP_GLYPHS[type] || '?'} ${type}<span class="bar" style="animation-duration:${remaining.toFixed(2)}s"></span></span>`;
+    })
+    .join('');
+}
+
+function updateLeaderboard() {
+  const byOwner = new Map();
+  for (const b of world.blobs.values()) {
+    if (!b.alive || b.ownerId === null) continue;
+    const entry = byOwner.get(b.ownerId) ?? { name: b.name, mass: 0, mine: b.ownerId === PLAYER_OWNER_ID };
+    entry.mass += b.mass;
+    byOwner.set(b.ownerId, entry);
+  }
+  const entries = [...byOwner.values()].sort((a, b) => b.mass - a.mass).slice(0, 8);
+  $('leaders').innerHTML = entries
+    .map((e, i) => `<li class="${e.mine ? 'you' : ''}"><span><span class="rank">${i + 1}</span>${escapeHtml(e.name)}</span><span>${Math.round(e.mass)}</span></li>`)
+    .join('');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// ---- main loop ----
 
 let last = performance.now();
-let gameOverShown = false;
-let leaderTimer = 0;
 
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
 
-  const pieces = world.getOwnedBlobs(PLAYER_OWNER_ID);
+  if (state === 'playing') {
+    const pieces = world.getOwnedBlobs(PLAYER_OWNER_ID);
 
-  if (pieces.length === 0) {
-    if (!gameOverShown) {
-      hud.innerHTML = 'eaten · <a href="javascript:location.reload()" style="color:#9fff9f;pointer-events:auto;">play again</a>';
-      hud.style.pointerEvents = 'auto';
-      effectsEl.innerHTML = '';
-      gameOverShown = true;
+    if (pieces.length === 0) {
+      world.tick(dt);
+      renderer.processEvents(world.events, PLAYER_OWNER_ID);
+      renderer.draw(dt);
+      endGame();
+      requestAnimationFrame(frame);
+      return;
     }
+
+    let cx = 0, cy = 0, totalMass = 0;
+    for (const p of pieces) {
+      cx += p.x;
+      cy += p.y;
+      totalMass += p.mass;
+    }
+    cx /= pieces.length;
+    cy /= pieces.length;
+    run.peakMass = Math.max(run.peakMass, totalMass);
+
+    const target = input.targetFor(cx, cy, renderer.camera);
+    transport.sendCommand(PLAYER_OWNER_ID, { type: 'setTarget', x: target.x, y: target.y });
+    for (const cmd of input.drainCommands()) {
+      transport.sendCommand(PLAYER_OWNER_ID, cmd);
+    }
+
     world.tick(dt);
-    renderer.draw();
-    requestAnimationFrame(frame);
-    return;
-  }
+    handleEvents(world.events);
+    renderer.processEvents(world.events, PLAYER_OWNER_ID);
 
-  let cx = 0, cy = 0, totalMass = 0;
-  for (const p of pieces) {
-    cx += p.x;
-    cy += p.y;
-    totalMass += p.mass;
-  }
-  cx /= pieces.length;
-  cy /= pieces.length;
+    const nowMs = Date.now();
+    renderer.vision = pieces.some((p) => p.effects.vision && p.effects.vision > nowMs);
+    renderer.setView({ x: cx, y: cy, mass: totalMass }, dt);
+    renderer.draw(dt);
+    renderer.drawMinimap($('minimap'), pieces, renderer.vision);
 
-  const target = input.targetFor(cx, cy, renderer.camera, canvas);
-  transport.sendCommand(PLAYER_OWNER_ID, { type: 'setTarget', x: target.x, y: target.y });
+    updateHud(pieces, totalMass, now);
+    updateEffectChips(pieces[0], nowMs);
 
-  for (const cmd of input.drainCommands()) {
-    transport.sendCommand(PLAYER_OWNER_ID, cmd);
-  }
+    // soft shimmer while actually growing
+    const still = pieces.every((p) => Math.hypot(p.vx, p.vy) <= 1);
+    const inShade = world.zoneAt(cx, cy)?.type === 'shade';
+    shimmerTimer += dt;
+    if (still && !inShade && shimmerTimer > 1.6) {
+      shimmerTimer = 0;
+      sound.shimmer();
+    }
 
-  world.tick(dt);
-  renderer.followPlayer({ x: cx, y: cy, mass: totalMass });
-  renderer.draw();
-
-  hud.textContent = `mass ${totalMass.toFixed(0)} · pieces ${pieces.length} · bots ${countBots()}`;
-
-  // Active effects chips (use the first piece as representative — they share effects across the owner if picked up)
-  renderEffects(pieces[0], now);
-
-  // Leaderboard refresh ~5x/sec
-  leaderTimer += dt;
-  if (leaderTimer > 0.2) {
-    leaderTimer = 0;
-    renderLeaderboard(pieces);
+    leaderTimer += dt;
+    if (leaderTimer > 0.25) {
+      leaderTimer = 0;
+      updateLeaderboard();
+    }
+  } else {
+    // menu / death: the garden keeps living behind the overlay — follow the apex blob
+    world.tick(dt);
+    renderer.processEvents(world.events, PLAYER_OWNER_ID);
+    let apex = null;
+    for (const b of world.blobs.values()) {
+      if (b.alive && (!apex || b.mass > apex.mass)) apex = b;
+    }
+    if (apex) renderer.setView({ x: apex.x, y: apex.y, mass: 400, zoom: 0.5 }, dt * 0.5);
+    renderer.draw(dt);
   }
 
   requestAnimationFrame(frame);
 }
 
-function countBots() {
-  let n = 0;
-  for (const b of world.blobs.values()) if (b.isBot && b.alive) n++;
-  return n;
-}
-
-function renderEffects(blob, now) {
-  const active = [];
-  for (const [type, expires] of Object.entries(blob.effects)) {
-    if (expires > now) {
-      const remaining = Math.ceil((expires - now) / 1000);
-      active.push(`<span class="effect-chip">${POWERUP_GLYPHS[type] || '?'} ${type} ${remaining}s</span>`);
-    }
-  }
-  effectsEl.innerHTML = active.join('');
-}
-
-function renderLeaderboard(playerPieces) {
-  // Aggregate by ownerId (player) and by single bot id
-  const entries = [];
-  const byOwner = new Map();
-  for (const b of world.blobs.values()) {
-    if (!b.alive) continue;
-    if (b.ownerId !== null) {
-      byOwner.set(b.ownerId, (byOwner.get(b.ownerId) ?? 0) + b.mass);
-    } else {
-      entries.push({ name: b.name || `bot ${b.id}`, mass: b.mass, mine: false });
-    }
-  }
-  for (const [owner, mass] of byOwner) {
-    entries.push({ name: owner === PLAYER_OWNER_ID ? 'you' : `p${owner}`, mass, mine: owner === PLAYER_OWNER_ID });
-  }
-  entries.sort((a, b) => b.mass - a.mass);
-  const top = entries.slice(0, 10);
-  leadersEl.innerHTML = top
-    .map((e) => `<li class="${e.mine ? 'you' : ''}">${escape(e.name)} · ${Math.round(e.mass)}</li>`)
-    .join('');
-}
-
-function escape(s) {
-  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-}
-
 requestAnimationFrame(frame);
+
+if (import.meta.env.DEV) window.__world = world;

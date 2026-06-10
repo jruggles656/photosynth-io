@@ -2,97 +2,610 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>photosynth-io</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>photosynth.io — be still. grow. consume.</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Spline+Sans+Mono:wght@300..700&display=swap" rel="stylesheet" />
     <style>
+      :root {
+        --abyss: #04100c;
+        --glass: rgba(8, 24, 17, 0.62);
+        --glass-bright: rgba(14, 38, 27, 0.7);
+        --chloro: #7dffb0;
+        --cyan: #6ee7ff;
+        --bloom: #ff8ad8;
+        --sun: #ffd87a;
+        --text: #d9f6e6;
+        --dim: #7da893;
+        --line: rgba(125, 255, 176, 0.16);
+        --font-display: 'Fraunces', Georgia, serif;
+        --font-ui: 'Spline Sans Mono', ui-monospace, monospace;
+      }
+
+      * { box-sizing: border-box; }
+
       html, body {
         margin: 0;
         padding: 0;
         overflow: hidden;
-        background: #0a0f0a;
-        font-family: system-ui, -apple-system, sans-serif;
-        color: #d8f0d8;
+        background: var(--abyss);
+        font-family: var(--font-ui);
+        color: var(--text);
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
       }
+
       #game {
         display: block;
-        width: 100vw;
-        height: 100vh;
-      }
-      #hud {
         position: fixed;
-        top: 12px;
-        left: 12px;
-        font-size: 14px;
-        pointer-events: none;
-        text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+        inset: 0;
       }
-      #effects {
+
+      /* ============ overlays ============ */
+
+      .overlay {
         position: fixed;
-        top: 36px;
-        left: 12px;
-        display: flex;
-        gap: 6px;
-        pointer-events: none;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 28px;
+        z-index: 20;
+        background: radial-gradient(ellipse at 50% 40%, rgba(4, 16, 12, 0.55) 0%, rgba(2, 8, 6, 0.82) 100%);
+        backdrop-filter: blur(3px);
+        -webkit-backdrop-filter: blur(3px);
       }
-      .effect-chip {
-        background: rgba(20,30,20,0.85);
-        border: 1px solid rgba(159,255,159,0.4);
-        border-radius: 6px;
-        padding: 4px 8px;
-        font-size: 12px;
-        text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+      body[data-state='menu'] #start-screen { display: flex; }
+      body[data-state='dead'] #death-screen { display: flex; }
+      body:not([data-state='playing']) .game-ui { display: none !important; }
+
+      .overlay > * {
+        animation: rise 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
       }
-      #leaderboard {
-        position: fixed;
-        top: 12px;
-        right: 12px;
-        background: rgba(20,30,20,0.6);
-        border: 1px solid rgba(159,255,159,0.2);
-        border-radius: 6px;
-        padding: 8px 12px;
-        font-size: 13px;
-        min-width: 160px;
-        pointer-events: none;
-        backdrop-filter: blur(4px);
+      .overlay > *:nth-child(2) { animation-delay: 0.08s; }
+      .overlay > *:nth-child(3) { animation-delay: 0.16s; }
+      .overlay > *:nth-child(4) { animation-delay: 0.24s; }
+      @keyframes rise {
+        from { opacity: 0; transform: translateY(18px); }
+        to { opacity: 1; transform: translateY(0); }
       }
-      #leaderboard h3 {
-        margin: 0 0 6px;
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        color: #9fff9f;
-        opacity: 0.7;
-      }
-      #leaderboard ol {
+
+      /* ============ start screen ============ */
+
+      .title {
+        font-family: var(--font-display);
+        font-style: italic;
+        font-weight: 460;
+        font-size: clamp(46px, 9vw, 96px);
+        letter-spacing: -0.025em;
+        line-height: 1;
         margin: 0;
-        padding-left: 22px;
+        text-align: center;
+        background: linear-gradient(115deg, var(--chloro) 20%, var(--cyan) 55%, var(--bloom) 90%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 0 28px rgba(125, 255, 176, 0.35));
+        animation: rise 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both, float 7s ease-in-out 0.7s infinite;
       }
-      #leaderboard li {
-        line-height: 1.5;
+      .title .tld { color: var(--cyan); opacity: 0.6; font-size: 0.5em; font-weight: 350; }
+      @keyframes float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-9px); }
       }
-      #leaderboard li.you {
-        color: #9fff9f;
+
+      .tagline {
+        margin: -14px 0 0;
+        font-size: 13px;
+        letter-spacing: 0.42em;
+        text-transform: uppercase;
+        color: var(--dim);
+        text-align: center;
+      }
+
+      .panel {
+        background: var(--glass);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 26px 30px;
+        width: min(420px, calc(100vw - 40px));
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(125, 255, 176, 0.08);
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .field-label {
+        font-size: 10px;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin-bottom: 8px;
+      }
+
+      #name-input {
+        width: 100%;
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid var(--line);
+        color: var(--text);
+        font-family: var(--font-ui);
+        font-size: 20px;
+        padding: 4px 2px 8px;
+        outline: none;
+        transition: border-color 0.25s;
+      }
+      #name-input:focus { border-bottom-color: var(--chloro); }
+      #name-input::placeholder { color: rgba(125, 168, 147, 0.4); }
+
+      .swatch-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .swatch {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        cursor: pointer;
+        padding: 0;
+        background: none;
+        position: relative;
+        transition: transform 0.15s;
+      }
+      .swatch:hover { transform: scale(1.12); }
+      .swatch .dot {
+        position: absolute;
+        inset: 3px;
+        border-radius: 50%;
+      }
+      .swatch.selected { border-color: var(--text); }
+      .swatch.selected .dot { box-shadow: 0 0 14px 2px currentColor; }
+
+      .skin-row { display: flex; gap: 10px; flex-wrap: wrap; }
+      .skin-btn {
+        width: 58px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(4, 16, 12, 0.5);
+        cursor: pointer;
+        padding: 6px 4px 5px;
+        color: var(--dim);
+        font-family: var(--font-ui);
+        font-size: 8.5px;
+        letter-spacing: 0.06em;
+        text-align: center;
+        transition: border-color 0.2s, transform 0.15s;
+      }
+      .skin-btn:hover { transform: translateY(-2px); }
+      .skin-btn canvas { display: block; margin: 0 auto 4px; }
+      .skin-btn.selected { border-color: var(--chloro); color: var(--text); box-shadow: 0 0 16px rgba(125, 255, 176, 0.18); }
+      .skin-btn.locked { opacity: 0.45; cursor: default; }
+      .skin-btn.locked:hover { transform: none; }
+      .skin-btn .lock { font-size: 8px; color: var(--sun); display: block; margin-top: 1px; }
+
+      #play-btn {
+        font-family: var(--font-ui);
+        font-weight: 600;
+        font-size: 14px;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: var(--abyss);
+        background: linear-gradient(110deg, var(--chloro), var(--cyan));
+        border: none;
+        border-radius: 999px;
+        padding: 15px 20px;
+        cursor: pointer;
+        transition: transform 0.15s, box-shadow 0.2s;
+        box-shadow: 0 0 24px rgba(125, 255, 176, 0.25);
+      }
+      #play-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 0 42px rgba(125, 255, 176, 0.45);
+      }
+      #play-btn:active { transform: translateY(0); }
+
+      .best-line {
+        font-size: 11px;
+        color: var(--dim);
+        text-align: center;
+        letter-spacing: 0.05em;
+      }
+
+      .hint {
+        font-size: 11px;
+        color: var(--dim);
+        letter-spacing: 0.08em;
+        text-align: center;
+        line-height: 1.9;
+      }
+      .hint b { color: var(--text); font-weight: 500; }
+
+      /* ============ death screen ============ */
+
+      #death-title {
+        font-family: var(--font-display);
+        font-style: italic;
+        font-weight: 420;
+        font-size: clamp(40px, 7vw, 72px);
+        margin: 0;
+        color: var(--bloom);
+        filter: drop-shadow(0 0 26px rgba(255, 138, 216, 0.4));
+        letter-spacing: -0.02em;
+      }
+      #death-by {
+        margin: -18px 0 0;
+        color: var(--dim);
+        font-size: 14px;
+        letter-spacing: 0.1em;
+      }
+      #death-by b { color: var(--text); font-weight: 600; }
+
+      .stat-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px 26px;
+      }
+      .stat {
+        text-align: center;
+      }
+      .stat .num {
+        font-size: 30px;
+        font-weight: 600;
+        color: var(--chloro);
+        line-height: 1.1;
+      }
+      .stat .num.gold { color: var(--sun); }
+      .stat .lbl {
+        font-size: 9px;
+        letter-spacing: 0.26em;
+        text-transform: uppercase;
+        color: var(--dim);
+        margin-top: 3px;
+      }
+      #new-best {
+        display: none;
+        text-align: center;
+        color: var(--sun);
+        font-size: 12px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+      }
+      #unlock-note {
+        display: none;
+        text-align: center;
+        color: var(--cyan);
+        font-size: 12px;
+        letter-spacing: 0.12em;
+      }
+
+      .btn-row { display: flex; gap: 12px; }
+      .btn-ghost {
+        flex: 1;
+        font-family: var(--font-ui);
+        font-size: 12px;
+        letter-spacing: 0.24em;
+        text-transform: uppercase;
+        color: var(--text);
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 13px 18px;
+        cursor: pointer;
+        transition: border-color 0.2s, background 0.2s;
+      }
+      .btn-ghost:hover { border-color: var(--chloro); background: rgba(125, 255, 176, 0.07); }
+      .btn-ghost.primary {
+        background: linear-gradient(110deg, var(--chloro), var(--cyan));
+        color: var(--abyss);
+        border: none;
         font-weight: 600;
       }
-      #controls {
-        position: fixed;
-        bottom: 12px;
-        left: 12px;
+
+      /* ============ in-game HUD ============ */
+
+      .game-ui { position: fixed; z-index: 10; pointer-events: none; }
+
+      #hud {
+        top: 16px;
+        left: 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      #mass-readout { display: flex; align-items: baseline; gap: 8px; }
+      #mass-num {
+        font-size: 34px;
+        font-weight: 600;
+        line-height: 1;
+        text-shadow: 0 0 18px rgba(125, 255, 176, 0.4), 0 2px 4px rgba(0, 0, 0, 0.6);
+      }
+      #mass-rate { font-size: 12px; font-weight: 500; }
+      #mass-rate.up { color: var(--chloro); }
+      #mass-rate.down { color: var(--sun); }
+      .hud-sub { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim); }
+
+      .chip-row { display: flex; gap: 6px; flex-wrap: wrap; max-width: 340px; }
+      .chip {
+        position: relative;
+        overflow: hidden;
+        background: var(--glass);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 5px 10px 7px;
+        font-size: 11px;
+        letter-spacing: 0.04em;
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+      }
+      .chip .bar {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        height: 2px;
+        width: 100%;
+        background: currentColor;
+        transform-origin: left;
+        animation: drain linear forwards;
+      }
+      @keyframes drain {
+        from { transform: scaleX(1); }
+        to { transform: scaleX(0); }
+      }
+      #zone-chip { display: none; }
+      #zone-chip.grove { color: var(--sun); border-color: rgba(255, 216, 122, 0.35); display: inline-block; }
+      #zone-chip.shade { color: #9db8e8; border-color: rgba(125, 160, 220, 0.3); display: inline-block; }
+
+      #day-pill {
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--glass);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 6px 16px;
+        font-size: 11.5px;
+        letter-spacing: 0.1em;
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+      }
+      #day-pill .icon { margin-right: 6px; }
+
+      #leaderboard {
+        top: 16px;
+        right: 16px;
+        background: var(--glass);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px 16px;
         font-size: 12px;
-        opacity: 0.6;
+        min-width: 178px;
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+      }
+      #leaderboard h3 {
+        margin: 0 0 8px;
+        font-size: 9px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.3em;
+        color: var(--dim);
+      }
+      #leaders { margin: 0; padding: 0; list-style: none; }
+      #leaders li {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        line-height: 1.75;
+        color: rgba(217, 246, 230, 0.7);
+      }
+      #leaders li .rank { color: var(--dim); margin-right: 6px; }
+      #leaders li:first-child .rank { color: var(--sun); }
+      #leaders li.you { color: var(--chloro); font-weight: 600; }
+
+      #minimap {
+        bottom: 16px;
+        right: 16px;
+        width: 168px;
+        height: 168px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(4, 14, 10, 0.5);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+      }
+
+      #controls-hint {
+        bottom: 16px;
+        left: 18px;
+        font-size: 10.5px;
+        letter-spacing: 0.06em;
+        color: var(--dim);
+        line-height: 1.8;
+      }
+      #controls-hint b { color: var(--text); font-weight: 500; }
+
+      #mute-btn {
+        position: fixed;
+        bottom: 52px;
+        left: 18px;
+        z-index: 11;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1px solid var(--line);
+        background: var(--glass);
+        color: var(--text);
+        font-size: 14px;
+        cursor: pointer;
+        pointer-events: auto;
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+      }
+      body:not([data-state='playing']) #mute-btn { display: none; }
+
+      /* ============ touch controls ============ */
+
+      #joy {
+        display: none;
+        position: fixed;
+        z-index: 12;
+        width: 112px;
+        height: 112px;
+        margin: -56px 0 0 -56px;
+        border: 1.5px solid rgba(125, 255, 176, 0.3);
+        border-radius: 50%;
         pointer-events: none;
+      }
+      #joy-thumb {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 44px;
+        height: 44px;
+        margin: -22px 0 0 -22px;
+        border-radius: 50%;
+        background: rgba(125, 255, 176, 0.25);
+        border: 1.5px solid rgba(125, 255, 176, 0.55);
+      }
+
+      #touch-buttons {
+        display: none;
+        position: fixed;
+        right: 18px;
+        bottom: 196px;
+        z-index: 12;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .touch-btn {
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        border: 1.5px solid var(--line);
+        background: var(--glass);
+        color: var(--text);
+        font-family: var(--font-ui);
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+      }
+      @media (pointer: coarse) {
+        body[data-state='playing'] #touch-buttons { display: flex; }
+        #controls-hint { display: none !important; }
+      }
+      body.touch[data-state='playing'] #touch-buttons { display: flex; }
+      body.touch #controls-hint { display: none !important; }
+
+      /* compact layout for narrow screens */
+      @media (max-width: 700px) {
+        #controls-hint { display: none !important; }
+        #day-pill {
+          left: 16px;
+          top: auto;
+          bottom: 16px;
+          transform: none;
+          font-size: 10.5px;
+        }
+        #leaderboard {
+          min-width: 138px;
+          font-size: 10.5px;
+          padding: 9px 12px;
+        }
+        #leaders li { line-height: 1.6; }
+        #minimap { width: 118px; height: 118px; }
+        #mass-num { font-size: 27px; }
+        #touch-buttons { bottom: 152px; }
       }
     </style>
   </head>
-  <body>
+  <body data-state="menu">
     <canvas id="game"></canvas>
-    <div id="hud">photosynth-io · scaffold ready</div>
-    <div id="effects"></div>
-    <div id="leaderboard">
-      <h3>Leaderboard</h3>
+
+    <!-- start screen -->
+    <div id="start-screen" class="overlay">
+      <h1 class="title">photosynth<span class="tld">.io</span></h1>
+      <p class="tagline">be still · grow · consume</p>
+      <div class="panel">
+        <div>
+          <div class="field-label">name</div>
+          <input id="name-input" maxlength="14" placeholder="unnamed organism" autocomplete="off" spellcheck="false" />
+        </div>
+        <div>
+          <div class="field-label">bioluminescence</div>
+          <div class="swatch-row" id="color-row"></div>
+        </div>
+        <div>
+          <div class="field-label">membrane</div>
+          <div class="skin-row" id="skin-row"></div>
+        </div>
+        <button id="play-btn">enter the garden</button>
+        <div class="best-line" id="best-line"></div>
+      </div>
+      <p class="hint">
+        <b>mouse</b> swim · <b>space</b> split · <b>W</b> / right-click eject · <b>hold S</b> root &amp; grow<br />
+        stillness is photosynthesis. sun groves double it. shade hides you. thorns pop the large.
+      </p>
+    </div>
+
+    <!-- death screen -->
+    <div id="death-screen" class="overlay">
+      <h1 id="death-title">consumed</h1>
+      <p id="death-by"></p>
+      <div class="panel">
+        <div class="stat-grid">
+          <div class="stat"><div class="num" id="stat-time">0:00</div><div class="lbl">survived</div></div>
+          <div class="stat"><div class="num" id="stat-peak">0</div><div class="lbl">peak mass</div></div>
+          <div class="stat"><div class="num" id="stat-kills">0</div><div class="lbl">blobs eaten</div></div>
+          <div class="stat"><div class="num" id="stat-pellets">0</div><div class="lbl">pellets</div></div>
+        </div>
+        <div id="new-best">✦ new personal best ✦</div>
+        <div id="unlock-note"></div>
+        <div class="btn-row">
+          <button class="btn-ghost" id="menu-btn">menu</button>
+          <button class="btn-ghost primary" id="respawn-btn">regrow</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- in-game UI -->
+    <div id="hud" class="game-ui">
+      <div id="mass-readout">
+        <span id="mass-num">20</span>
+        <span id="mass-rate"></span>
+      </div>
+      <div class="hud-sub" id="pieces-sub">mass</div>
+      <div class="chip-row">
+        <span class="chip" id="zone-chip"></span>
+      </div>
+      <div class="chip-row" id="effects"></div>
+    </div>
+    <div id="day-pill" class="game-ui"><span class="icon">☀</span><span id="day-text">photosynthesis ×1.6</span></div>
+    <div id="leaderboard" class="game-ui">
+      <h3>The Garden</h3>
       <ol id="leaders"></ol>
     </div>
-    <div id="controls">mouse · space split · stand still grow · move burn</div>
+    <canvas id="minimap" class="game-ui"></canvas>
+    <div id="controls-hint" class="game-ui">
+      <b>space</b> split · <b>W</b> eject · <b>S</b> root · <b>M</b> mute
+    </div>
+    <button id="mute-btn" title="mute (M)">♪</button>
+
+    <!-- touch controls -->
+    <div id="joy"><div id="joy-thumb"></div></div>
+    <div id="touch-buttons">
+      <button class="touch-btn" id="btn-split">split</button>
+      <button class="touch-btn" id="btn-eject">eject</button>
+    </div>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
